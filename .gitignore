@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.db
+data/config.json
+dist/
+build/
+*.spec
+.venv/
+.venv-release/
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
