@@ -59,6 +59,11 @@ class TranslatorApp:
         self.event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.hotkeys = HotkeyManager(self._on_hook_event)
         self.mouse_hooks = MouseHookManager(self._on_hook_event)
+        self._event_poll_active_ms = 16
+        self._event_poll_idle_ms = 48
+        self._translate_flush_chars = 8
+        self._translate_flush_interval_sec = 0.03
+        self._translate_in_flight = False
 
         self.pending_selection_text = ""
         self.pending_selection_at = 0.0
@@ -118,7 +123,7 @@ class TranslatorApp:
         self.root.bind("<Escape>", lambda _e: self._hide_window())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.report_callback_exception = self._on_tk_callback_exception
-        self.root.after(120, self._poll_events)
+        self.root.after(self._event_poll_idle_ms, self._poll_events)
         self.root.after(12, self._poll_input_fallback)
 
     def run(self) -> None:
@@ -900,6 +905,7 @@ class TranslatorApp:
         self._translate_request_seq += 1
         req_id = self._translate_request_seq
         self._active_translate_request_seq = req_id
+        self._translate_in_flight = True
         self._active_translation_text = ""
         self._set_result_text("")
         self.status_var.set("翻译中...")
@@ -934,6 +940,8 @@ class TranslatorApp:
             chunks: list[str] = []
             buffered_chars = 0
             last_flush_at = time.monotonic()
+            flush_chars = self._translate_flush_chars
+            flush_interval_sec = self._translate_flush_interval_sec
 
             def flush_chunks() -> None:
                 nonlocal buffered_chars, last_flush_at
@@ -965,7 +973,7 @@ class TranslatorApp:
                 chunks.append(chunk)
                 buffered_chars += len(chunk)
                 now = time.monotonic()
-                if buffered_chars >= 24 or "\n" in chunk or (now - last_flush_at) >= 0.08:
+                if buffered_chars >= flush_chars or "\n" in chunk or (now - last_flush_at) >= flush_interval_sec:
                     flush_chunks()
 
             try:
@@ -1124,11 +1132,13 @@ class TranslatorApp:
         self.root.after(12, self._poll_input_fallback)
 
     def _poll_events(self) -> None:
+        processed = 0
         while True:
             try:
                 event, payload = self.event_queue.get_nowait()
             except queue.Empty:
                 break
+            processed += 1
 
             if event == "status":
                 self.status_var.set(str(payload))
@@ -1234,7 +1244,7 @@ class TranslatorApp:
                     and not bool(data.get("defer_popup"))
                     and req_id == self._active_popup_request_seq
                 ):
-                    self._update_result_popup(src, self._active_translation_text, pending=True)
+                    self._append_result_popup_text(src, delta, pending=True)
 
             elif event == "translate_done":
                 data = payload
@@ -1244,6 +1254,7 @@ class TranslatorApp:
                 req_id = int(data.get("req_id", 0))
                 if req_id != self._active_translate_request_seq:
                     continue
+                self._translate_in_flight = False
 
                 previous_result = self._active_translation_text
                 self._active_translation_text = res
@@ -1295,6 +1306,7 @@ class TranslatorApp:
                 req_id = int(data.get("req_id", 0))
                 if req_id != self._active_translate_request_seq:
                     continue
+                self._translate_in_flight = False
 
                 src = str(data.get("text", ""))
                 self.status_var.set(message)
@@ -1315,7 +1327,8 @@ class TranslatorApp:
                 else:
                     messagebox.showerror("翻译失败", message)
 
-        self.root.after(120, self._poll_events)
+        next_delay_ms = self._event_poll_active_ms if (self._translate_in_flight or processed) else self._event_poll_idle_ms
+        self.root.after(next_delay_ms, self._poll_events)
 
     def _emit_selection_candidate(self, payload) -> None:
         now = time.time()
@@ -1887,13 +1900,18 @@ class TranslatorApp:
             widget.insert("1.0", text)
         widget.config(state="disabled")
 
+    def _append_text_widget_content(self, widget: tk.Text, text: str) -> None:
+        if not text:
+            return
+        widget.config(state="normal")
+        widget.insert("end", text)
+        widget.config(state="disabled")
+
     def _append_result_text(self, text: str) -> None:
         if not text:
             return
-        self.result_text.config(state="normal")
-        self.result_text.insert("end", text)
+        self._append_text_widget_content(self.result_text, text)
         self.result_text.see("end")
-        self.result_text.config(state="disabled")
 
     def _schedule_result_popup_auto_close(self, delay_ms: int = 4200) -> None:
         if self.result_popup is None or not self.result_popup.winfo_exists():
@@ -1937,6 +1955,42 @@ class TranslatorApp:
         if self._result_popup_content_widget is not None and self._result_popup_content_widget.winfo_exists():
             display_text = result_text if result_text else ("正在翻译，请稍候..." if self.result_popup_pending else "")
             self._set_text_widget_content(self._result_popup_content_widget, display_text)
+            self._result_popup_content_widget.see("end")
+
+        if self.result_popup_pending:
+            if self.result_popup_auto_close_job and self.result_popup:
+                try:
+                    self.result_popup.after_cancel(self.result_popup_auto_close_job)
+                except Exception:
+                    pass
+                self.result_popup_auto_close_job = None
+            return
+
+        if not self.result_popup_pinned and not self.result_popup_dragging and not self.result_popup_hovering:
+            self._schedule_result_popup_auto_close(4200)
+
+    def _append_result_popup_text(self, source_text: str, delta: str, pending: bool | None = None) -> None:
+        if self.result_popup is None or not self.result_popup.winfo_exists() or not delta:
+            return
+
+        previous_result = self._result_popup_result_text
+        self._result_popup_source_text = source_text
+        self._result_popup_result_text = f"{previous_result}{delta}"
+        if pending is not None:
+            self.result_popup_pending = bool(pending)
+
+        if self._result_popup_title_var is not None:
+            self._result_popup_title_var.set("正在翻译..." if self.result_popup_pending else "翻译结果")
+
+        if self._result_popup_copy_button is not None and self._result_popup_copy_button.winfo_exists():
+            copy_state = "disabled" if self.result_popup_pending or not self._result_popup_result_text.strip() else "normal"
+            self._result_popup_copy_button.config(state=copy_state)
+
+        if self._result_popup_content_widget is not None and self._result_popup_content_widget.winfo_exists():
+            if previous_result:
+                self._append_text_widget_content(self._result_popup_content_widget, delta)
+            else:
+                self._set_text_widget_content(self._result_popup_content_widget, self._result_popup_result_text)
             self._result_popup_content_widget.see("end")
 
         if self.result_popup_pending:
