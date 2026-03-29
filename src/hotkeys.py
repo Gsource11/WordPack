@@ -23,8 +23,10 @@ MOD_CONTROL = 0x0002
 
 HOTKEY_ID_TRANSLATE = 1001
 HOTKEY_ID_TOGGLE_WINDOW = 1002
+HOTKEY_ID_SCREENSHOT = 1003
 VK_T = 0x54
 VK_H = 0x48
+VK_S = 0x53
 
 
 class POINT(Structure):
@@ -86,6 +88,8 @@ class HotkeyManager:
             self.callback("status", "全局热键注册失败：Ctrl+Alt+T 已被占用")
         if not user32.RegisterHotKey(None, HOTKEY_ID_TOGGLE_WINDOW, MOD_CONTROL | MOD_ALT, VK_H):
             self.callback("status", "全局热键注册失败：Ctrl+Alt+H 已被占用")
+        if not user32.RegisterHotKey(None, HOTKEY_ID_SCREENSHOT, MOD_CONTROL | MOD_ALT, VK_S):
+            self.callback("status", "全局热键注册失败：Ctrl+Alt+S 已被占用")
 
         self._keyboard_proc = LowLevelKeyboardProc(self._keyboard_callback)
         self._keyboard_hook = user32.SetWindowsHookExW(
@@ -105,6 +109,8 @@ class HotkeyManager:
                 self.callback("translate_selection", None)
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_TOGGLE_WINDOW:
                 self.callback("toggle_window", None)
+            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_SCREENSHOT:
+                self.callback("screenshot_translate", None)
 
             user32.TranslateMessage(byref(msg))
             user32.DispatchMessageW(byref(msg))
@@ -114,6 +120,7 @@ class HotkeyManager:
             self._keyboard_hook = None
         user32.UnregisterHotKey(None, HOTKEY_ID_TRANSLATE)
         user32.UnregisterHotKey(None, HOTKEY_ID_TOGGLE_WINDOW)
+        user32.UnregisterHotKey(None, HOTKEY_ID_SCREENSHOT)
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
         if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):

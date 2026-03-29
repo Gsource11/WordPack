@@ -13,8 +13,10 @@ from .app_logging import get_logger
 from .branding import APP_TITLE
 from .config import AppConfig, ConfigStore
 from .hotkeys import HotkeyManager
+from .ocr import ScreenshotOCRService
 from .selection_capture import ClipboardCaptureResult, SelectionCaptureService
 from .mouse_hooks import MouseHookManager
+from .screenshot import ScreenCaptureOverlay, ScreenRegion, capture_screen_region
 from .storage import HistoryStore
 from .translator import TranslationService
 
@@ -33,6 +35,7 @@ class TranslatorApp:
 
         self.history = HistoryStore(self.data_dir / "history.db")
         self.service = TranslationService(self.data_dir / "offline_dict.json", self.get_config)
+        self.ocr_service = ScreenshotOCRService()
         self.selection_capture = SelectionCaptureService()
         self.logger = get_logger(__name__)
 
@@ -79,12 +82,19 @@ class TranslatorApp:
         self._translate_request_seq = 0
         self._active_translate_request_seq = 0
         self._active_popup_request_seq = 0
+        self._screenshot_request_seq = 0
+        self._active_screenshot_request_seq = 0
         self._active_translation_text = ""
         self._result_popup_source_text = ""
         self._result_popup_result_text = ""
         self._result_popup_title_var: tk.StringVar | None = None
         self._result_popup_content_widget: tk.Text | None = None
         self._result_popup_copy_button: tk.Button | None = None
+        self._screenshot_overlay: ScreenCaptureOverlay | None = None
+        self._screenshot_capture_active = False
+        self._screenshot_show_popup = True
+        self._screenshot_popup_position: tuple[int, int] | None = None
+        self._screenshot_temporarily_hid_root = False
 
         # Polling fallback: avoids relying only on low-level global hooks.
         self._fb_last_lbtn_down = False
@@ -94,6 +104,7 @@ class TranslatorApp:
         self._fb_last_ctrl_down = False
         self._fb_last_ctrl_tap_at = 0.0
         self._fb_last_combo_t = False
+        self._fb_last_combo_s = False
         self._fb_last_combo_h = False
         self._last_selection_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
@@ -148,7 +159,7 @@ class TranslatorApp:
         ttk.Button(top, textvariable=self.direction_var, command=self._cycle_translation_direction, style="Glass.TButton").pack(side="left", padx=(0, 6))
 
         ttk.Checkbutton(top, text="置顶", variable=self.topmost_var, command=self._on_topmost_changed).pack(side="left", padx=(2, 6))
-        ttk.Button(top, text="划词设置", command=self._open_capture_settings, style="Glass.TButton").pack(side="left")
+        ttk.Button(top, text="交互设置", command=self._open_capture_settings, style="Glass.TButton").pack(side="left")
         ttk.Button(top, text="离线模型", command=self._open_offline_models, style="Glass.TButton").pack(side="left", padx=6)
         ttk.Button(top, text="AI设置", command=self._open_settings, style="Glass.TButton").pack(side="left")
         ttk.Button(top, text="测试AI", command=self._on_test_ai_click, style="Glass.TButton").pack(side="left", padx=6)
@@ -159,12 +170,13 @@ class TranslatorApp:
         ttk.Button(actions, text="翻译", command=self._on_translate_click, style="Glass.TButton").pack(side="left")
         ttk.Button(actions, text="润色(AI)", command=self._on_polish_click, style="Glass.TButton").pack(side="left", padx=6)
         ttk.Button(actions, text="粘贴并翻译", command=self._paste_and_translate, style="Glass.TButton").pack(side="left")
+        ttk.Button(actions, text="截图翻译", command=self._on_screenshot_translate_click, style="Glass.TButton").pack(side="left", padx=6)
 
         ttk.Label(
             main,
             text=(
-                "划词: 选中后图标触发或双击 Ctrl 触发（可配置） ｜ "
-                "快捷键: Ctrl+Alt+T"
+                "划词: 图标触发或双击 Ctrl 触发（可配置） ｜ "
+                "快捷键: Ctrl+Alt+T ｜ 截图: Ctrl+Alt+S"
             ),
             style="Glass.TLabel",
         ).pack(anchor="w", pady=(0, 8))
@@ -303,7 +315,7 @@ class TranslatorApp:
     def _open_capture_settings(self) -> None:
         dialog = tk.Toplevel(self.root)
         dialog.withdraw()
-        dialog.title("划词设置")
+        dialog.title("交互设置")
         dialog.transient(self.root)
         dialog.configure(bg="#edf2f7")
 
@@ -315,6 +327,7 @@ class TranslatorApp:
         selection_icon_trigger_var = tk.StringVar(value=self.config.interaction.selection_icon_trigger)
         selection_icon_cancel_sensitivity_var = tk.StringVar(value=self.config.interaction.selection_icon_cancel_sensitivity)
         selection_hotkey_var = tk.BooleanVar(value=self.config.interaction.selection_hotkey_enabled)
+        screenshot_hotkey_var = tk.BooleanVar(value=self.config.interaction.screenshot_hotkey_enabled)
         icon_delay_var = tk.StringVar(value=str(self.config.interaction.selection_icon_delay_ms))
 
         ttk.Checkbutton(frame, text="启用划词翻译", variable=selection_enabled_var).pack(anchor="w", pady=3)
@@ -361,6 +374,7 @@ class TranslatorApp:
         ttk.Label(row4, text="选区后鼠标静置该时长才显示图标", style="Glass.TLabel").pack(side="left")
 
         ttk.Checkbutton(frame, text="启用划词快捷键（Ctrl+Alt+T）", variable=selection_hotkey_var).pack(anchor="w", pady=(12, 2))
+        ttk.Checkbutton(frame, text="启用截图快捷键（Ctrl+Alt+S）", variable=screenshot_hotkey_var).pack(anchor="w", pady=(4, 2))
 
         ttk.Label(
             frame,
@@ -397,14 +411,15 @@ class TranslatorApp:
             self.config.interaction.selection_icon_trigger = icon_trigger
             self.config.interaction.selection_icon_cancel_sensitivity = icon_cancel_sensitivity
             self.config.interaction.selection_hotkey_enabled = bool(selection_hotkey_var.get())
+            self.config.interaction.screenshot_hotkey_enabled = bool(screenshot_hotkey_var.get())
             self.config.interaction.selection_icon_delay_ms = max(300, min(5000, icon_delay))
 
             self._save_interaction_config()
-            self.status_var.set("划词设置已保存")
+            self.status_var.set("交互设置已保存")
             dialog.destroy()
 
         ttk.Button(frame, text="保存", command=save, style="Glass.TButton").pack(anchor="e", pady=10)
-        self._show_dialog(dialog, 560, 390)
+        self._show_dialog(dialog, 560, 420)
 
     def _apply_glass_effect(self) -> None:
         self.root.update_idletasks()
@@ -697,7 +712,186 @@ class TranslatorApp:
         self.source_text.insert("1.0", text)
         self._start_translate(text, action="translate", show_popup=False)
 
-    def _start_translate(self, text: str, action: str, show_popup: bool) -> None:
+    def _on_screenshot_translate_click(self) -> None:
+        self._start_screenshot_capture(show_popup=True)
+
+    def _start_screenshot_capture(self, show_popup: bool) -> None:
+        if self._screenshot_overlay is not None:
+            self.status_var.set("截图操作已在进行中")
+            self.logger.info("Screenshot capture ignored: overlay already active")
+            return
+
+        self._translate_request_seq += 1
+        self._active_translate_request_seq = self._translate_request_seq
+        self._active_popup_request_seq = 0
+        self._active_translation_text = ""
+        self._set_result_text("")
+        self._hide_selection_icon()
+        self._destroy_result_popup()
+        self._screenshot_capture_active = True
+        self._screenshot_show_popup = bool(show_popup)
+        self._screenshot_popup_position = None
+        self._temporarily_hide_root_for_capture()
+        self.status_var.set("拖拽选择截图区域，右键或 Esc 取消")
+        self.logger.info("Screenshot capture started popup=%s root_hidden=%s", show_popup, self._screenshot_temporarily_hid_root)
+        self.root.after(80, self._launch_screenshot_overlay)
+
+    def _temporarily_hide_root_for_capture(self) -> None:
+        self._screenshot_temporarily_hid_root = False
+        if self.hidden:
+            return
+        try:
+            self.root.withdraw()
+            self._screenshot_temporarily_hid_root = True
+        except Exception:
+            self._screenshot_temporarily_hid_root = False
+
+    def _restore_root_after_capture(self) -> None:
+        if not self._screenshot_temporarily_hid_root:
+            return
+        self._screenshot_temporarily_hid_root = False
+        if self.hidden:
+            return
+        self.root.deiconify()
+        try:
+            self.root.attributes("-alpha", float(self._window_target_alpha))
+        except Exception:
+            pass
+        self.root.lift()
+        self.root.after_idle(self.root.lift)
+        self.logger.info("Screenshot capture restored main window")
+
+    def _keep_root_hidden_after_capture(self) -> None:
+        if not self._screenshot_temporarily_hid_root:
+            return
+        self._screenshot_temporarily_hid_root = False
+        self.hidden = True
+        self.logger.info("Screenshot capture kept main window hidden for popup flow")
+
+    def _launch_screenshot_overlay(self) -> None:
+        if self._screenshot_overlay is not None:
+            return
+        try:
+            overlay = ScreenCaptureOverlay(
+                self.root,
+                on_capture=self._on_screenshot_region_selected,
+                on_cancel=self._on_screenshot_capture_cancelled,
+            )
+            self._screenshot_overlay = overlay
+            overlay.start()
+            self.logger.info("Screenshot overlay shown bounds=%s", overlay.bounds.as_bbox())
+        except Exception as exc:
+            self._screenshot_overlay = None
+            self._screenshot_capture_active = False
+            self._restore_root_after_capture()
+            message = f"无法启动截图: {exc}"
+            self.status_var.set(message)
+            if self._screenshot_show_popup:
+                self._show_result_popup("截图失败", message)
+            else:
+                messagebox.showerror("截图失败", message)
+
+    def _on_screenshot_capture_cancelled(self) -> None:
+        self._screenshot_overlay = None
+        self._screenshot_capture_active = False
+        self._restore_root_after_capture()
+        self.status_var.set("截图已取消")
+        self.logger.info("Screenshot capture cancelled")
+
+    def _on_screenshot_region_selected(self, region: ScreenRegion) -> None:
+        self._screenshot_overlay = None
+        cursor_x, cursor_y = self._get_cursor_position()
+        self._screenshot_popup_position = (int(cursor_x) + 12, int(cursor_y) + 16)
+        self.status_var.set("正在截取区域...")
+        self.logger.info(
+            "Screenshot region selected bbox=%s popup_pos=%s",
+            region.as_bbox(),
+            self._screenshot_popup_position,
+        )
+
+        def capture_then_ocr() -> None:
+            try:
+                image = capture_screen_region(region)
+            except Exception as exc:
+                self._screenshot_capture_active = False
+                if self._screenshot_show_popup:
+                    self._keep_root_hidden_after_capture()
+                else:
+                    self._restore_root_after_capture()
+                message = str(exc)
+                self.status_var.set(message)
+                if self._screenshot_show_popup:
+                    self._show_result_popup("截图失败", message, popup_pos=self._screenshot_popup_position)
+                else:
+                    messagebox.showerror("截图失败", message)
+                return
+
+            self._screenshot_capture_active = False
+            if self._screenshot_show_popup:
+                self._keep_root_hidden_after_capture()
+                self._active_popup_position = self._show_result_popup(
+                    "截图翻译",
+                    "",
+                    pending=True,
+                    popup_pos=self._screenshot_popup_position,
+                )
+                self.logger.info("Screenshot popup shown immediately at %s", self._active_popup_position)
+            else:
+                self._restore_root_after_capture()
+            self._start_screenshot_ocr(image, show_popup=self._screenshot_show_popup)
+
+        self.root.after(80, capture_then_ocr)
+
+    def _start_screenshot_ocr(self, image, show_popup: bool) -> None:
+        self._screenshot_request_seq += 1
+        req_id = self._screenshot_request_seq
+        self._active_screenshot_request_seq = req_id
+        self.status_var.set("截图翻译中...")
+        self.logger.info(
+            "Screenshot OCR request size=%sx%s popup=%s",
+            getattr(image, "width", "?"),
+            getattr(image, "height", "?"),
+            show_popup,
+        )
+
+        def worker() -> None:
+            try:
+                text = self.ocr_service.extract_text(image).strip()
+                if not text:
+                    raise RuntimeError("截图中未识别到可翻译文本")
+                self.event_queue.put(
+                    (
+                        "screenshot_ocr_done",
+                        {
+                            "text": text,
+                            "show_popup": show_popup,
+                            "req_id": req_id,
+                        },
+                    )
+                )
+            except Exception as exc:
+                self.logger.exception("Screenshot OCR failed req_id=%s", req_id)
+                self.event_queue.put(
+                    (
+                        "screenshot_ocr_error",
+                        {
+                            "message": str(exc),
+                            "show_popup": show_popup,
+                            "req_id": req_id,
+                        },
+                    )
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_translate(
+        self,
+        text: str,
+        action: str,
+        show_popup: bool,
+        defer_popup: bool = False,
+        reuse_popup: bool = False,
+    ) -> None:
         if not text:
             self.status_var.set("请输入文本")
             return
@@ -709,11 +903,28 @@ class TranslatorApp:
         self._active_translation_text = ""
         self._set_result_text("")
         self.status_var.set("翻译中...")
-        self.logger.info("Translate request action=%s mode=%s chars=%d popup=%s", action, mode, len(text), show_popup)
+        self.logger.info(
+            "Translate request action=%s mode=%s chars=%d popup=%s defer_popup=%s reuse_popup=%s",
+            action,
+            mode,
+            len(text),
+            show_popup,
+            defer_popup,
+            reuse_popup,
+        )
 
-        if show_popup:
+        if show_popup and not defer_popup:
             self._active_popup_request_seq = req_id
-            self._active_popup_position = self._show_result_popup(text, "", pending=True)
+            if reuse_popup and self.result_popup and self.result_popup.winfo_exists():
+                self._update_result_popup(text, "", pending=True)
+                self._active_popup_position = (self.result_popup.winfo_x(), self.result_popup.winfo_y())
+            else:
+                self._active_popup_position = self._show_result_popup(
+                    text,
+                    "",
+                    pending=True,
+                    popup_pos=self._active_popup_position,
+                )
         else:
             self._active_popup_request_seq = 0
             if self.result_popup_pending:
@@ -741,6 +952,7 @@ class TranslatorApp:
                             "mode": mode,
                             "action": action,
                             "show_popup": show_popup,
+                            "defer_popup": defer_popup,
                             "req_id": req_id,
                         },
                     )
@@ -771,6 +983,7 @@ class TranslatorApp:
                             "mode": mode,
                             "action": action,
                             "show_popup": show_popup,
+                            "defer_popup": defer_popup,
                             "req_id": req_id,
                         },
                     )
@@ -785,6 +998,7 @@ class TranslatorApp:
                             "message": str(exc),
                             "text": text,
                             "show_popup": show_popup,
+                            "defer_popup": defer_popup,
                             "req_id": req_id,
                         },
                     )
@@ -797,6 +1011,7 @@ class TranslatorApp:
         VK_CONTROL = 0x11
         VK_MENU = 0x12  # ALT
         VK_T = 0x54
+        VK_S = 0x53
         VK_H = 0x48
 
         try:
@@ -825,6 +1040,7 @@ class TranslatorApp:
             ctrl_down = bool(windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
             alt_down = bool(windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000)
             t_down = bool(windll.user32.GetAsyncKeyState(VK_T) & 0x8000)
+            s_down = bool(windll.user32.GetAsyncKeyState(VK_S) & 0x8000)
             h_down = bool(windll.user32.GetAsyncKeyState(VK_H) & 0x8000)
 
             if not self._fb_last_lbtn_down and lbtn_down:
@@ -832,7 +1048,11 @@ class TranslatorApp:
 
             # Left button release -> likely selection gesture.
             if self._fb_last_lbtn_down and not lbtn_down:
-                if self.config.interaction.selection_enabled and not self._is_own_window_foreground():
+                if (
+                    self.config.interaction.selection_enabled
+                    and not self._screenshot_capture_active
+                    and not self._is_own_window_foreground()
+                ):
                     down = self._fb_lbtn_down_pos
                     dx = abs(cursor_x - down[0]) if down else 0
                     dy = abs(cursor_y - down[1]) if down else 0
@@ -879,6 +1099,13 @@ class TranslatorApp:
                     self._translate_selected("划词翻译", silent_if_empty=True)
             self._fb_last_combo_t = combo_t
 
+            # Ctrl+Alt+S hotkey fallback.
+            combo_s = ctrl_down and alt_down and s_down
+            if combo_s and not self._fb_last_combo_s:
+                if self.config.interaction.screenshot_hotkey_enabled:
+                    self._start_screenshot_capture(show_popup=True)
+            self._fb_last_combo_s = combo_s
+
             # Ctrl+Alt+H hotkey fallback.
             combo_h = ctrl_down and alt_down and h_down
             if combo_h and not self._fb_last_combo_h:
@@ -920,8 +1147,16 @@ class TranslatorApp:
                     self._translate_pending_selection("划词翻译")
 
             elif event == "selection_mouse_up":
-                if self.config.interaction.selection_enabled and not self._is_own_window_foreground():
+                if (
+                    self.config.interaction.selection_enabled
+                    and not self._screenshot_capture_active
+                    and not self._is_own_window_foreground()
+                ):
                     self._emit_selection_candidate(payload)
+
+            elif event == "screenshot_translate":
+                if self.config.interaction.screenshot_hotkey_enabled:
+                    self._start_screenshot_capture(show_popup=True)
 
             elif event == "toggle_window":
                 self._toggle_window_visibility()
@@ -937,6 +1172,44 @@ class TranslatorApp:
                 else:
                     self.logger.error("AI test failed: %s", message)
                     messagebox.showerror("AI 测试", message)
+
+            elif event == "screenshot_ocr_done":
+                data = payload
+                assert isinstance(data, dict)
+                req_id = int(data.get("req_id", 0))
+                if req_id != self._active_screenshot_request_seq:
+                    continue
+
+                text = str(data.get("text", "")).strip()
+                show_popup = bool(data.get("show_popup"))
+                if not text:
+                    continue
+
+                self.source_text.delete("1.0", "end")
+                self.source_text.insert("1.0", text)
+                self.status_var.set("截图翻译中...")
+                self.logger.info("Screenshot OCR done chars=%d popup=%s", len(text), show_popup)
+                if self._screenshot_popup_position is not None:
+                    self._active_popup_position = self._screenshot_popup_position
+                self._start_translate(text, action="截图翻译", show_popup=show_popup, reuse_popup=show_popup)
+
+            elif event == "screenshot_ocr_error":
+                data = payload if isinstance(payload, dict) else {"message": str(payload), "show_popup": False, "req_id": 0}
+                req_id = int(data.get("req_id", 0))
+                if req_id != self._active_screenshot_request_seq:
+                    continue
+
+                message = str(data.get("message", "截图处理失败"))
+                show_popup = bool(data.get("show_popup"))
+                self.status_var.set(message)
+                self.logger.error("Screenshot OCR error req_id=%s: %s", req_id, message)
+                if show_popup:
+                    if self.result_popup and self.result_popup.winfo_exists():
+                        self._update_result_popup("截图翻译失败", message, pending=False)
+                    else:
+                        self._show_result_popup("截图翻译失败", message, popup_pos=self._screenshot_popup_position)
+                else:
+                    messagebox.showerror("截图翻译失败", message)
 
             elif event == "translate_chunk":
                 data = payload
@@ -956,7 +1229,11 @@ class TranslatorApp:
                 self._append_result_text(delta)
                 self.status_var.set(f"生成中 · {mode_name} · {action_name}")
 
-                if bool(data.get("show_popup")) and req_id == self._active_popup_request_seq:
+                if (
+                    bool(data.get("show_popup"))
+                    and not bool(data.get("defer_popup"))
+                    and req_id == self._active_popup_request_seq
+                ):
                     self._update_result_popup(src, self._active_translation_text, pending=True)
 
             elif event == "translate_done":
@@ -1003,11 +1280,14 @@ class TranslatorApp:
                         }
                     self._schedule_selection_icon()
 
-                if bool(data["show_popup"]) and req_id == self._active_popup_request_seq:
-                    if self.result_popup and self.result_popup.winfo_exists():
-                        self._update_result_popup(src, res, pending=False)
-                    else:
+                if bool(data["show_popup"]):
+                    if bool(data.get("defer_popup")):
                         self._show_result_popup(src, res, popup_pos=self._active_popup_position)
+                    elif req_id == self._active_popup_request_seq:
+                        if self.result_popup and self.result_popup.winfo_exists():
+                            self._update_result_popup(src, res, pending=False)
+                        else:
+                            self._show_result_popup(src, res, popup_pos=self._active_popup_position)
 
             elif event == "translate_error":
                 data = payload if isinstance(payload, dict) else {"message": str(payload), "show_popup": False, "req_id": 0}
@@ -1019,16 +1299,19 @@ class TranslatorApp:
                 src = str(data.get("text", ""))
                 self.status_var.set(message)
                 self.logger.error("Translate error: %s", message)
-                if bool(data.get("show_popup")) and req_id == self._active_popup_request_seq:
+                if bool(data.get("show_popup")):
                     popup_text = self._active_translation_text
                     if popup_text:
                         popup_text = f"{popup_text}\n\n[生成中断] {message}"
                     else:
                         popup_text = message
-                    if self.result_popup and self.result_popup.winfo_exists():
-                        self._update_result_popup(src or "翻译失败", popup_text, pending=False)
-                    else:
+                    if bool(data.get("defer_popup")):
                         self._show_result_popup(src or "翻译失败", popup_text, popup_pos=self._active_popup_position)
+                    elif req_id == self._active_popup_request_seq:
+                        if self.result_popup and self.result_popup.winfo_exists():
+                            self._update_result_popup(src or "翻译失败", popup_text, pending=False)
+                        else:
+                            self._show_result_popup(src or "翻译失败", popup_text, popup_pos=self._active_popup_position)
                 else:
                     messagebox.showerror("翻译失败", message)
 
@@ -1347,8 +1630,19 @@ class TranslatorApp:
 
     def _is_own_window_foreground(self) -> bool:
         try:
-            fg = windll.user32.GetForegroundWindow()
-            return int(fg) == int(self.root.winfo_id())
+            fg = int(windll.user32.GetForegroundWindow())
+            own_windows = {int(self.root.winfo_id())}
+            if self.selection_icon_popup and self.selection_icon_popup.winfo_exists():
+                own_windows.add(int(self.selection_icon_popup.winfo_id()))
+            if self.result_popup and self.result_popup.winfo_exists():
+                own_windows.add(int(self.result_popup.winfo_id()))
+            if (
+                self._screenshot_overlay is not None
+                and self._screenshot_overlay.window is not None
+                and self._screenshot_overlay.window.winfo_exists()
+            ):
+                own_windows.add(int(self._screenshot_overlay.window.winfo_id()))
+            return fg in own_windows
         except Exception:
             return False
 
@@ -1906,6 +2200,13 @@ class TranslatorApp:
 
     def _on_close(self) -> None:
         self.logger.info("Shutting down UI")
+        if self._screenshot_overlay is not None:
+            try:
+                self._screenshot_overlay.cancel()
+            except Exception:
+                pass
+            self._screenshot_overlay = None
+        self._screenshot_capture_active = False
         self._destroy_result_popup()
         self._hide_selection_icon()
         self.mouse_hooks.stop()

@@ -1,162 +1,184 @@
-# WordPack 词小包（Windows）
+# WordPack（Windows）
 
-WordPack（词小包）是一个 Windows 桌面翻译工具，支持离线翻译与 OpenAI 兼容接口翻译（含 Ollama）。
+WordPack 是一个 Windows 桌面翻译工具，支持离线翻译、OpenAI 兼容接口翻译、划词翻译，以及截图翻译。
 
-当前仓库为**初版（v0.1.0）**，目标是先稳定核心流程：输入翻译、划词翻译、AI 接口切换、离线模型管理。
+当前仓库的重点是把桌面端核心链路做稳：
+- 输入文本翻译
+- 划词翻译
+- 截图翻译
+- 离线模型管理
+- OpenAI / Ollama 兼容接口接入
 
 ## 功能概览
 
-- 双模式翻译：`offline`（Argos 优先，词典兜底）与 `ai`（OpenAI 兼容/Ollama）。
-- 主界面支持：翻译、AI 润色、粘贴并翻译、AI 配置保存与连接测试。
-- 划词翻译支持 `icon` / `double_ctrl` 两种触发，图标触发支持 `click` / `hover`。
-- 划词取词链路升级为 `UI Automation -> Ctrl+C fallback`，优先读取当前控件公开的选区文本。
-- 全局快捷键：`Ctrl+Alt+T`（划词翻译，可关闭）与 `Ctrl+Alt+H`（显示/隐藏主窗口）。
-- 本地数据持久化：SQLite 历史记录、配置文件、按日滚动日志（单文件 10MB 分片）。
+- 双模式翻译：`offline` 与 `ai`
+- 主界面支持：翻译、AI 润色、粘贴并翻译、截图翻译
+- 划词翻译支持两种触发方式：
+  - `icon`：选区静置后显示小图标
+  - `double_ctrl`：双击 `Ctrl` 触发
+- 划词取词链路：
+  - 优先 `UI Automation`
+  - 失败时回退 `Ctrl+C + 剪贴板`
+- 截图翻译链路：
+  - `Ctrl+Alt+S` 或点击“截图翻译”
+  - 拖拽选择区域
+  - 本地 OCR 提取文本
+  - 复用现有翻译链路与结果气泡
+- 全局快捷键：
+  - `Ctrl+Alt+T`：划词翻译
+  - `Ctrl+Alt+S`：截图翻译
+  - `Ctrl+Alt+H`：显示 / 隐藏主窗口
+- 本地持久化：
+  - SQLite 历史记录
+  - JSON 配置文件
+  - 按日滚动日志
 
-## 使用方式
+## 运行环境
 
-### 1) 普通用户（推荐）
+- Windows 10 / 11
+- Python 3.10+
+- 需要可用的 `tkinter`
 
-直接使用打包产物（无需安装 Python）。
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
-```
-
-构建完成后产物在 `dist/WordPack`，分发整个目录即可。
-
-### 2) 开发运行
-
-环境要求：
-
-- Windows 10/11
-- Python 3.10+（需可用 `tkinter`）
-
-安装与启动：
+## 安装与启动
 
 ```powershell
 pip install -r requirements.txt
 python app.py
 ```
 
-## 离线模型（Argos）
+## 打包发布
 
-在应用中点击 `离线模型`：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
+```
 
-1. 点击 `导入模型`，选择 `.argosmodel` 文件  
-2. 选择默认方向（`auto` 或如 `en->zh` / `zh->en`）  
-3. 点击 `保存选择`
+构建完成后，产物位于 `dist/WordPack`。
+
+## 离线翻译
+
+离线模式分两层：
+- 优先使用 Argos Translate 模型
+- 没有可用模型时回退内置离线词典
+
+在应用中点击“离线模型”后可：
+1. 导入 `.argosmodel`
+2. 选择默认方向
+3. 保存配置
 
 说明：
-
-- 未安装 Argos 运行库或未导入模型时，离线模式会退回词典兜底
+- 未安装 Argos 运行库或未导入模型时，会回退词典兜底
 - 长文本离线翻译依赖 Argos 模型
 
-## AI 配置（OpenAI 兼容 / Ollama）
+## AI 配置
 
-在应用中点击 `AI设置`：
-
+在应用中点击“AI 设置”后配置：
 - `Base URL`
 - `API Key`
 - `Model`
 - `Timeout(s)`
 
-可点击 `Ollama默认` 自动填充本地参数：
-
+内置 Ollama 默认值：
 - Base URL: `http://127.0.0.1:11434/v1`
 - API Key: `ollama`
 
-配置后可使用 `保存并测试` 或主界面 `测试AI`。
+配置完成后可点击“测试AI”验证连接。
 
-## 划词取词策略
+## 划词翻译说明
 
-WordPack 当前的系统取词顺序为：
+WordPack 当前的取词顺序：
+1. `UI Automation`
+2. `Ctrl+C` 剪贴板回退
 
-1. 先走 `UI Automation`
-2. 若 UIA 当前拿不到选区，再回退到模拟 `Ctrl+C` 并读取剪贴板
+适合 `UI Automation` 的常见控件：
+- 原生 `Edit`
+- `Document`
+- 部分 RichEdit / WPF / XAML 文本控件
 
-### 1) UI Automation 怎么接入
-
-- 通过 `src/selection_capture.py` 调起 `src/uia_capture.ps1`
-- PowerShell 脚本使用 Windows 自带的 `.NET UI Automation` 接口读取前台焦点元素与鼠标点位元素
-- 优先尝试当前元素及其父元素链上的 `TextPattern.GetSelection()`
-- 成功时直接返回选中文本，不污染剪贴板
-
-### 2) 哪些控件能稳定取词
-
-`UIA stable`
-
-- 暴露 `TextPattern` 的 `Edit` 控件
-- 暴露 `TextPattern` 的 `Document` 控件
-- 常见原生文本输入框、RichEdit、部分 WPF / XAML 文本控件
-
-`UIA conditional`
-
+不稳定或经常回退的场景：
 - 浏览器内容区
 - Electron / Chromium 嵌入页面
-- 自绘文本控件
-- 终端、游戏、Canvas 或 GPU 渲染表面
+- 自绘控件
+- 终端、游戏、Canvas、GPU 渲染界面
 
-这些控件不一定公开稳定的 `TextPattern`，所以可能直接走回退。
+当 UIA 不暴露 `TextPattern`、没有选区、超时或脚本异常时，才会回退到剪贴板。
 
-### 3) 什么时候回退到 Ctrl+C
+## 截图翻译说明
 
-以下情况会回退到 `Ctrl+C`：
+截图翻译默认流程：
+1. 触发截图模式
+2. 拖拽选择区域
+3. 使用本地 OCR 提取文本
+4. 调用当前翻译模式进行翻译
+5. 在鼠标附近显示结果气泡
 
-- UIA 没有找到可用前台元素
-- 当前控件不支持 `TextPattern`
-- UIA 返回空选区
-- UIA 调用超时或脚本异常
+交互说明：
+- 左键拖拽选择区域
+- `Esc` 退出截图模式
+- 右键退出截图模式
 
-以下情况不会强制回退：
+当前实现策略：
+- 截图后立即显示结果气泡
+- 气泡内部展示“翻译中”，不单独暴露 OCR 中间态
+- 最终结果直接更新到同一气泡
 
-- 密码框等 `IsPassword=true` 的控件
+## 配置文件与数据
+
+- `data/config.json`：运行时配置
+- `data/history.db`：历史记录数据库
+- `data/offline_dict.json`：内置离线词典
+- `%USERPROFILE%\\.wordpack\\`：日志目录
 
 ## 项目结构
 
 ```text
 .
-├─ app.py                      # 程序入口
-├─ requirements.txt            # 依赖
+├─ app.py
+├─ requirements.txt
 ├─ scripts/
-│  └─ build_release.ps1        # 发布构建脚本（PyInstaller）
+│  └─ build_release.ps1
 ├─ src/
-│  ├─ ui.py                    # Tkinter 主界面与交互流程
-│  ├─ translator.py            # 离线/AI 翻译服务
-│  ├─ hotkeys.py               # 全局键盘热键
-│  ├─ mouse_hooks.py           # 全局鼠标钩子
-│  ├─ selection_capture.py     # UIA 优先、Ctrl+C 兜底的取词策略
-│  ├─ uia_capture.ps1          # Windows UI Automation 取词脚本
-│  ├─ storage.py               # 历史记录存储
-│  ├─ config.py                # 配置模型与读写
-│  ├─ app_logging.py           # 日志系统
-│  └─ branding.py              # 应用命名
+│  ├─ ui.py
+│  ├─ translator.py
+│  ├─ config.py
+│  ├─ storage.py
+│  ├─ hotkeys.py
+│  ├─ mouse_hooks.py
+│  ├─ selection_capture.py
+│  ├─ uia_capture.ps1
+│  ├─ screenshot.py
+│  ├─ ocr.py
+│  ├─ app_logging.py
+│  └─ branding.py
 └─ data/
-   └─ offline_dict.json        # 离线词典兜底数据
+   └─ offline_dict.json
 ```
-
-## 数据文件说明
-
-- `data/config.json`：运行时配置（已加入 `.gitignore`）
-- `data/history.db`：本地历史数据库（已加入 `.gitignore`）
-- `data/offline_dict.json`：内置离线词典兜底
-- `%USERPROFILE%\.wordpack\`：日志目录
 
 ## 日志与排障
 
-- 应用日志默认写入 `%USERPROFILE%\.wordpack\`
-- 划词取词日志会记录最终使用的是 `uia` 还是 `clipboard`
-- 当取词回退或失败时，日志会附带 `uia_reason`、`clipboard_reason`、控件类型和简要细节
-- `argostranslate` 的调试级 INFO 日志默认已降噪到 `WARNING`，避免淹没取词诊断日志
+- 应用日志默认写入 `%USERPROFILE%\\.wordpack\\`
+- 划词翻译日志会记录最终使用的是 `uia` 还是 `clipboard`
+- 截图翻译日志会记录：
+  - 截图模式启动 / 取消
+  - 截图区域
+  - OCR 请求与结果
+  - 气泡显示位置
+  - 翻译请求与异常
+- `argostranslate` 的噪声日志默认压到 `WARNING`
 
 ## 已知限制
 
-- 当前仅支持 Windows（依赖 Win32 全局钩子）
-- 划词翻译优先依赖 UI Automation；当目标程序不暴露文本选区时才回退到复制选中文本
-- 浏览器内容区、Electron、自绘控件、终端等场景下，仍可能因目标程序限制而抓取失败
-- 在未导入 Argos 模型时，离线长文本能力受限
+- 当前仅支持 Windows
+- 划词翻译依赖 Win32 全局钩子与 UI Automation
+- 浏览器内容区、Electron、自绘控件、终端等场景下，划词取词仍可能失败
+- 截图翻译当前输出为整段文本翻译结果，不做原图上的逐块替换排版
+- 截图 OCR 为本地 OCR，识别效果受截图清晰度、字号、背景干扰影响
 
-## 初版说明
+## 开发说明
 
-- 当前版本定位为首个可用版本，优先保证主流程稳定
-- 欢迎基于 Issue/PR 反馈异常场景与改进建议
+安装依赖后建议先做静态检查：
+
+```powershell
+python -m compileall app.py src
+```
+
+如果你修改了打包依赖，记得重新执行发布脚本验证 `dist/WordPack` 是否可运行。

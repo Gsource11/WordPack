@@ -25,6 +25,7 @@ class InteractionConfig:
     selection_icon_trigger: str = "click"  # click | hover
     selection_icon_cancel_sensitivity: str = "medium"  # low | medium | high
     selection_hotkey_enabled: bool = True
+    screenshot_hotkey_enabled: bool = True
     selection_icon_delay_ms: int = 1500
 
 
@@ -74,6 +75,7 @@ class ConfigStore:
                 selection_icon_trigger=str(interaction_raw.get("selection_icon_trigger", "click") or "click"),
                 selection_icon_cancel_sensitivity=str(interaction_raw.get("selection_icon_cancel_sensitivity", "medium") or "medium"),
                 selection_hotkey_enabled=bool(interaction_raw.get("selection_hotkey_enabled", True)),
+                screenshot_hotkey_enabled=bool(interaction_raw.get("screenshot_hotkey_enabled", True)),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
             ),
         )

@@ -28,6 +28,8 @@ if (!(Test-Path $Py)) {
     --name WordPack `
     --add-data "data/offline_dict.json;data" `
     --add-data "src/uia_capture.ps1;src" `
+    --collect-all rapidocr `
+    --collect-all onnxruntime `
     --hidden-import argostranslate `
     --hidden-import argostranslate.package `
     --hidden-import argostranslate.translate `
