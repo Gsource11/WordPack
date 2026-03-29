@@ -27,6 +27,7 @@ if (!(Test-Path $Py)) {
     --windowed `
     --name WordPack `
     --add-data "data/offline_dict.json;data" `
+    --add-data "src/uia_capture.ps1;src" `
     --hidden-import argostranslate `
     --hidden-import argostranslate.package `
     --hidden-import argostranslate.translate `

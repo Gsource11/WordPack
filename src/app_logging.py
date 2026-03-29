@@ -11,6 +11,10 @@ MAX_LOG_BYTES = 10 * 1024 * 1024
 
 _lock = threading.Lock()
 _configured = False
+NOISY_LOGGERS: dict[str, int] = {
+    "argostranslate": logging.WARNING,
+    "argostranslate.utils": logging.WARNING,
+}
 
 
 class DailySizeFileHandler(logging.Handler):
@@ -74,10 +78,12 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
             root.addHandler(handler)
 
         logging.captureWarnings(True)
+        for logger_name, logger_level in NOISY_LOGGERS.items():
+            logging.getLogger(logger_name).setLevel(logger_level)
         _configured = True
 
     logger = logging.getLogger("wordpack")
-    logger.info("Logging initialized. dir=%s", LOG_DIR)
+    logger.info("Logging initialized. dir=%s noisy_loggers=%s", LOG_DIR, ",".join(sorted(NOISY_LOGGERS)))
     return logger
 
 

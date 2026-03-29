@@ -13,6 +13,7 @@ from .app_logging import get_logger
 from .branding import APP_TITLE
 from .config import AppConfig, ConfigStore
 from .hotkeys import HotkeyManager
+from .selection_capture import ClipboardCaptureResult, SelectionCaptureService
 from .mouse_hooks import MouseHookManager
 from .storage import HistoryStore
 from .translator import TranslationService
@@ -32,6 +33,7 @@ class TranslatorApp:
 
         self.history = HistoryStore(self.data_dir / "history.db")
         self.service = TranslationService(self.data_dir / "offline_dict.json", self.get_config)
+        self.selection_capture = SelectionCaptureService()
         self.logger = get_logger(__name__)
 
         self.root = tk.Tk()
@@ -356,8 +358,9 @@ class TranslatorApp:
         ttk.Label(
             frame,
             text=(
-                "说明: 划词翻译基于系统选中文本抓取。"
-                "某些不可复制区域或特殊渲染控件中可能无结果。"
+                "说明: 划词取词优先走 UI Automation。"
+                "标准 Edit / Document 文本控件最稳定；浏览器内容区、Electron、自绘画布、终端等控件常会回退。"
+                "当 UIA 不暴露 TextPattern、没有选区或超时失败时，才回退到 Ctrl+C。"
             ),
             style="Glass.TLabel",
             wraplength=560,
@@ -1130,7 +1133,7 @@ class TranslatorApp:
         probe = self.pending_selection_text.strip()
         if not probe:
             # Probe only when cache is empty.
-            probe = self._capture_selection_by_ctrl_c(wait_sec=0.08).strip()
+            probe = self._capture_selected_text(wait_sec=0.08, payload=self.selection_capture_payload).strip()
         if not probe:
             if self.selection_capture_retry < 8:
                 self.selection_capture_retry += 1
@@ -1232,7 +1235,7 @@ class TranslatorApp:
 
         text = self.pending_selection_text.strip()
         if not text:
-            text = self._capture_selection_by_ctrl_c(wait_sec=0.12).strip()
+            text = self._capture_selected_text(wait_sec=0.12, payload=self.selection_capture_payload).strip()
 
         if not text:
             message = f"{action}: 未检测到可翻译文本"
@@ -1256,12 +1259,49 @@ class TranslatorApp:
             return False
 
     def _translate_selected(self, reason: str, silent_if_empty: bool = False) -> None:
-        text = self._capture_selection_by_ctrl_c(wait_sec=0.1)
+        text = self._capture_selected_text(wait_sec=0.1, payload=self.selection_capture_payload)
         if not text:
             if not silent_if_empty:
                 self.status_var.set(f"{reason}: 未检测到可翻译文本")
             return
         self._start_translate(text, action=reason, show_popup=True)
+
+    def _capture_selected_text(
+        self,
+        wait_sec: float = 0.1,
+        allow_unchanged: bool = False,
+        payload: dict | None = None,
+    ) -> str:
+        result = self.selection_capture.capture(
+            self._capture_selection_by_ctrl_c,
+            payload=payload,
+            wait_sec=wait_sec,
+            allow_unchanged=allow_unchanged,
+        )
+        if result.source == "uia" and result.has_text():
+            self.logger.info(
+                "Selection capture success | scheme=uia | strategy=%s | control=%s | reason=%s | detail=%s",
+                result.strategy or "n/a",
+                result.control_summary(),
+                result.reason or "n/a",
+                result.detail or "n/a",
+            )
+        elif result.source == "clipboard" and result.has_text():
+            self.logger.info(
+                "Selection capture success | scheme=clipboard | strategy=%s | control=%s | uia_reason=%s | uia_detail=%s | clipboard_reason=%s | clipboard_detail=%s",
+                result.strategy or "n/a",
+                result.control_summary(),
+                result.uia_reason or result.fallback_reason or "n/a",
+                result.uia_detail or result.fallback_detail or "n/a",
+                result.clipboard_reason or "n/a",
+                result.clipboard_detail or result.detail or "n/a",
+            )
+        else:
+            self.logger.warning(
+                "Selection capture failed | %s",
+                result.diagnostics_summary(),
+            )
+        return result.text.strip()
 
     def _copy_selection_once(self, wait_sec: float = 0.1) -> str:
         VK_CONTROL = 0x11
@@ -1279,7 +1319,11 @@ class TranslatorApp:
             return ""
         return selected.strip()
 
-    def _capture_selection_by_ctrl_c(self, wait_sec: float = 0.1, allow_unchanged: bool = False) -> str:
+    def _capture_selection_by_ctrl_c(
+        self,
+        wait_sec: float = 0.1,
+        allow_unchanged: bool = False,
+    ) -> ClipboardCaptureResult:
         # Safety-first path: avoid low-level clipboard memory operations.
         # Some clipboard formats are not HGLOBAL and may crash when force-read.
         backup_text = self._get_clipboard_text(raw=True)
@@ -1289,33 +1333,101 @@ class TranslatorApp:
             seq_before = -1
 
         selected = ""
-        for _ in range(3):
-            copied = self._copy_selection_once(wait_sec=wait_sec)
+        selected_reason = ""
+        attempt_notes: list[str] = []
+        attempts = 0
+        last_error = ""
+        saw_nonempty_copy = False
+        saw_unchanged_copy = False
+
+        for attempt_idx in range(3):
+            attempts = attempt_idx + 1
+            try:
+                copied = self._copy_selection_once(wait_sec=wait_sec)
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                attempt_notes.append(f"attempt={attempts}:copy-exception")
+                break
+
             try:
                 seq_after = int(windll.user32.GetClipboardSequenceNumber())
             except Exception:
                 seq_after = -1
 
+            copied = copied.strip()
+            seq_changed = seq_before >= 0 and seq_after >= 0 and seq_after != seq_before
+
+            if copied:
+                saw_nonempty_copy = True
+
             if copied and seq_after != seq_before:
-                selected = copied.strip()
+                selected = copied
+                selected_reason = "clipboard-seq-changed"
+                attempt_notes.append(f"attempt={attempts}:captured-seq-changed len={len(selected)}")
                 break
 
-            if allow_unchanged and copied and backup_text is not None and copied.strip() != backup_text.strip():
-                selected = copied.strip()
+            if allow_unchanged and copied and backup_text is not None and copied != backup_text.strip():
+                selected = copied
+                selected_reason = "clipboard-differs-from-backup"
+                attempt_notes.append(f"attempt={attempts}:captured-different-from-backup len={len(selected)}")
                 if selected:
                     break
 
+            if copied and not seq_changed:
+                saw_unchanged_copy = True
+                attempt_notes.append(f"attempt={attempts}:copied-but-seq-unchanged len={len(copied)}")
+            else:
+                attempt_notes.append(f"attempt={attempts}:empty")
             time.sleep(0.04)
 
+        restored = True
         if backup_text is not None:
             restored = self._restore_clipboard_text(backup_text)
             if not restored:
                 now = time.time()
                 if now - self._last_clipboard_restore_error_log_at >= 5.0:
                     self._last_clipboard_restore_error_log_at = now
-                    self.logger.warning("Failed to restore clipboard text")
+                    self.logger.warning(
+                        "Selection capture clipboard restore failed | attempts=%s | detail=%s",
+                        attempts,
+                        "; ".join(attempt_notes) or "n/a",
+                    )
 
-        return selected
+        detail_parts = []
+        if attempt_notes:
+            detail_parts.append("; ".join(attempt_notes))
+        if last_error:
+            detail_parts.append(f"error={last_error}")
+        if backup_text is None:
+            detail_parts.append("backup=none")
+        if not restored:
+            detail_parts.append("restore=failed")
+        detail = " | ".join(detail_parts) if detail_parts else "no-attempts"
+
+        if selected:
+            return ClipboardCaptureResult(
+                text=selected,
+                reason=selected_reason or "clipboard-captured",
+                detail=detail,
+                attempts=attempts,
+                restore_ok=restored,
+            )
+
+        failure_reason = "clipboard-empty"
+        if last_error:
+            failure_reason = "clipboard-copy-exception"
+        elif saw_unchanged_copy:
+            failure_reason = "clipboard-unchanged"
+        elif saw_nonempty_copy:
+            failure_reason = "clipboard-copy-without-seq-change"
+
+        return ClipboardCaptureResult(
+            text="",
+            reason=failure_reason,
+            detail=detail,
+            attempts=attempts,
+            restore_ok=restored,
+        )
 
     def _restore_clipboard_text(self, text: str | None) -> bool:
         if text is None:
