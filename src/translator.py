@@ -4,7 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib import error, parse, request
 
 from .config import AppConfig
@@ -311,6 +311,10 @@ class OfflineTranslator:
         return self.dictionary.translate(normalized)
 
 
+class PartialStreamError(RuntimeError):
+    """Streaming backend failed after already yielding partial content."""
+
+
 class OpenAICompatibleTranslator:
     def __init__(self, cfg_getter) -> None:
         self.cfg_getter = cfg_getter
@@ -400,21 +404,28 @@ class OpenAICompatibleTranslator:
         except Exception as exc:
             raise RuntimeError(f"请求失败: {exc}") from exc
 
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, list):
+            text_chunks: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type", "")).strip().lower()
+                if item_type in {"text", "output_text"}:
+                    text_chunks.append(str(item.get("text", "")))
+            return "".join(text_chunks)
+        return str(content)
+
     def _extract_openai_content(self, data: dict[str, Any]) -> str:
         choices = data.get("choices", [])
         if not choices:
             raise RuntimeError("AI 响应格式异常：缺少 choices")
 
         message = choices[0].get("message", {})
-        content = message.get("content", "")
-        if isinstance(content, list):
-            text_chunks: list[str] = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text_chunks.append(str(item.get("text", "")))
-            content = "".join(text_chunks)
-
-        result = str(content).strip()
+        result = self._extract_text_content(message.get("content", "")).strip()
         if result:
             return result
 
@@ -424,6 +435,98 @@ class OpenAICompatibleTranslator:
             return fallback
 
         raise RuntimeError("AI 响应为空")
+
+    def _stream_json_lines(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        timeout_sec: int,
+        parse_line: Callable[[str], str],
+        on_delta: Callable[[str], None],
+    ) -> str:
+        req = request.Request(
+            url=url,
+            method="POST",
+            headers=headers,
+            data=json.dumps(payload).encode("utf-8"),
+        )
+        chunks: list[str] = []
+        try:
+            with request.urlopen(req, timeout=timeout_sec) as resp:
+                while True:
+                    raw_line = resp.readline()
+                    if not raw_line:
+                        break
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
+                    chunk = parse_line(line)
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    on_delta(chunk)
+        except TimeoutError as exc:
+            raise RuntimeError(f"请求超时: {exc}") from exc
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {exc.code}: {body[:240] or exc.reason}") from exc
+        except error.URLError as exc:
+            raise RuntimeError(f"网络错误: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"请求失败: {exc}") from exc
+
+        result = "".join(chunks).strip()
+        if result:
+            return result
+        raise RuntimeError("AI 流式响应为空")
+
+    def _parse_openai_stream_line(self, line: str) -> str:
+        if line.startswith(":") or not line.startswith("data:"):
+            return ""
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            return ""
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"OpenAI 流式响应解析失败: {exc}") from exc
+
+        error_info = data.get("error")
+        if error_info:
+            if isinstance(error_info, dict):
+                message = str(error_info.get("message", "")).strip() or json.dumps(error_info, ensure_ascii=False)
+            else:
+                message = str(error_info).strip()
+            raise RuntimeError(message or "OpenAI 流式响应异常")
+
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+        delta = choices[0].get("delta", {})
+        if not isinstance(delta, dict):
+            return ""
+
+        content = self._extract_text_content(delta.get("content"))
+        if content:
+            return content
+
+        return self._extract_text_content(delta.get("text"))
+
+    def _parse_ollama_stream_line(self, line: str) -> str:
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Ollama 流式响应解析失败: {exc}") from exc
+
+        error_text = str(data.get("error", "")).strip()
+        if error_text:
+            raise RuntimeError(error_text)
+
+        message = data.get("message", {})
+        if not isinstance(message, dict):
+            return ""
+        return str(message.get("content", "") or "")
 
     def _chat_openai_compatible(
         self,
@@ -452,6 +555,35 @@ class OpenAICompatibleTranslator:
         headers = self._build_headers(api_key)
         data = self._post_json(url, payload, headers, timeout_sec)
         return self._extract_openai_content(data)
+
+    def _chat_openai_compatible_stream(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        timeout_sec: int,
+        on_delta: Callable[[str], None],
+        max_tokens: int = 600,
+    ) -> str:
+        v1_root = base_url.rstrip("/")
+        if not v1_root.endswith("/v1"):
+            v1_root = self._join_url(v1_root, "v1")
+
+        url = self._join_url(v1_root, "chat/completions")
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if self._is_local_base_url(base_url):
+            payload["think"] = False
+
+        headers = self._build_headers(api_key)
+        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_openai_stream_line, on_delta)
 
     def _chat_ollama_native(
         self,
@@ -486,7 +618,77 @@ class OpenAICompatibleTranslator:
 
         raise RuntimeError("Ollama 响应为空")
 
-    def _chat(self, messages: list[dict[str, str]], temperature: float = 0.2, purpose: str = "translate") -> str:
+    def _chat_ollama_native_stream(
+        self,
+        base_url: str,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        timeout_sec: int,
+        on_delta: Callable[[str], None],
+        num_predict: int = 600,
+    ) -> str:
+        native_base = base_url[:-3] if base_url.endswith("/v1") else base_url
+        url = self._join_url(native_base, "api/chat")
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "options": {"temperature": temperature, "num_predict": num_predict},
+        }
+        headers = {"Content-Type": "application/json"}
+        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_ollama_stream_line, on_delta)
+
+    def _run_backend(
+        self,
+        candidates: list[int],
+        error_message: str,
+        use_stream: bool,
+        stream_call: Callable[[int, Callable[[str], None]], str],
+        sync_call: Callable[[int], str],
+        on_delta: Callable[[str], None] | None,
+    ) -> str:
+        def emit_full_result(result: str) -> str:
+            if on_delta and result:
+                on_delta(result)
+            return result
+
+        last_error: Exception | None = None
+        for timeout in candidates:
+            emitted = False
+
+            def relay(chunk: str) -> None:
+                nonlocal emitted
+                emitted = True
+                if on_delta:
+                    on_delta(chunk)
+
+            try:
+                if use_stream:
+                    return stream_call(timeout, relay)
+                return sync_call(timeout)
+            except Exception as exc:
+                last_error = exc
+                if use_stream and not emitted:
+                    try:
+                        return emit_full_result(sync_call(timeout))
+                    except Exception as fallback_exc:
+                        last_error = fallback_exc
+                if use_stream and emitted:
+                    raise PartialStreamError(str(last_error) if last_error else error_message) from last_error
+                if not self._is_timeout_text(str(last_error)):
+                    break
+
+        raise RuntimeError(str(last_error) if last_error else error_message)
+
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        purpose: str = "translate",
+        on_delta: Callable[[str], None] | None = None,
+    ) -> str:
         cfg: AppConfig = self.cfg_getter()
         base_url = cfg.openai.base_url.strip().rstrip("/")
         api_key = cfg.openai.api_key.strip()
@@ -505,32 +707,39 @@ class OpenAICompatibleTranslator:
             candidates = self._generation_timeouts(timeout_sec)
 
         is_local = self._is_local_base_url(base_url)
+        use_stream = on_delta is not None and purpose != "test"
 
         def try_ollama() -> str:
-            last_error: Exception | None = None
-            for timeout in candidates:
-                try:
-                    return self._chat_ollama_native(base_url, model, messages, temperature, timeout)
-                except Exception as exc:
-                    last_error = exc
-                    if not self._is_timeout_text(str(exc)):
-                        break
-            raise RuntimeError(str(last_error) if last_error else "Ollama 调用失败")
+            return self._run_backend(
+                candidates=candidates,
+                error_message="Ollama 调用失败",
+                use_stream=use_stream,
+                stream_call=lambda timeout, relay: self._chat_ollama_native_stream(
+                    base_url, model, messages, temperature, timeout, relay
+                ),
+                sync_call=lambda timeout: self._chat_ollama_native(base_url, model, messages, temperature, timeout),
+                on_delta=on_delta,
+            )
 
         def try_openai() -> str:
-            last_error: Exception | None = None
-            for timeout in candidates:
-                try:
-                    return self._chat_openai_compatible(base_url, api_key, model, messages, temperature, timeout)
-                except Exception as exc:
-                    last_error = exc
-                    if not self._is_timeout_text(str(exc)):
-                        break
-            raise RuntimeError(str(last_error) if last_error else "OpenAI兼容接口调用失败")
+            return self._run_backend(
+                candidates=candidates,
+                error_message="OpenAI兼容接口调用失败",
+                use_stream=use_stream,
+                stream_call=lambda timeout, relay: self._chat_openai_compatible_stream(
+                    base_url, api_key, model, messages, temperature, timeout, relay
+                ),
+                sync_call=lambda timeout: self._chat_openai_compatible(
+                    base_url, api_key, model, messages, temperature, timeout
+                ),
+                on_delta=on_delta,
+            )
 
         if is_local:
             try:
                 return try_ollama()
+            except PartialStreamError as ollama_exc:
+                raise RuntimeError(str(ollama_exc)) from ollama_exc
             except Exception as ollama_exc:
                 if self._is_timeout_text(str(ollama_exc)):
                     raise RuntimeError(
@@ -538,17 +747,23 @@ class OpenAICompatibleTranslator:
                     ) from ollama_exc
                 try:
                     return try_openai()
+                except PartialStreamError as openai_exc:
+                    raise RuntimeError(str(openai_exc)) from openai_exc
                 except Exception as openai_exc:
                     raise RuntimeError(f"Ollama原生接口失败: {ollama_exc} | OpenAI兼容接口失败: {openai_exc}") from openai_exc
 
         openai_err: Exception | None = None
         try:
             return try_openai()
+        except PartialStreamError as exc:
+            raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             openai_err = exc
 
         try:
             return try_ollama()
+        except PartialStreamError as exc:
+            raise RuntimeError(str(exc)) from exc
         except Exception as ollama_exc:
             if openai_err:
                 raise RuntimeError(f"OpenAI兼容接口失败: {openai_err} | Ollama原生接口失败: {ollama_exc}") from ollama_exc
@@ -568,6 +783,20 @@ class OpenAICompatibleTranslator:
         ]
         return self._chat(messages, temperature=0.15, purpose="translate")
 
+    def translate_stream(self, text: str, on_delta: Callable[[str], None]) -> str:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是专业翻译助手。默认把输入翻译为简体中文。"
+                    "若输入本身为中文，则翻译为自然英文。"
+                    "仅输出翻译结果，不要解释。"
+                ),
+            },
+            {"role": "user", "content": text.strip()},
+        ]
+        return self._chat(messages, temperature=0.15, purpose="translate", on_delta=on_delta)
+
     def polish(self, text: str) -> str:
         messages = [
             {
@@ -580,6 +809,19 @@ class OpenAICompatibleTranslator:
             {"role": "user", "content": text.strip()},
         ]
         return self._chat(messages, temperature=0.35, purpose="polish")
+
+    def polish_stream(self, text: str, on_delta: Callable[[str], None]) -> str:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是文本润色助手。保留原意，优化语法、用词和可读性。"
+                    "仅输出润色后的文本，不要解释。"
+                ),
+            },
+            {"role": "user", "content": text.strip()},
+        ]
+        return self._chat(messages, temperature=0.35, purpose="polish", on_delta=on_delta)
 
     def test_connection(self) -> tuple[bool, str]:
         cfg: AppConfig = self.cfg_getter()
@@ -630,10 +872,23 @@ class TranslationService:
             return self.ai.translate(text)
         return self.offline.translate(text)
 
+    def translate_stream(self, text: str, mode: str, on_delta: Callable[[str], None]) -> str:
+        if mode == "ai":
+            return self.ai.translate_stream(text, on_delta)
+        result = self.offline.translate(text)
+        if result:
+            on_delta(result)
+        return result
+
     def polish(self, text: str, mode: str) -> str:
         if mode != "ai":
             raise ValueError("润色仅支持 AI 模式")
         return self.ai.polish(text)
+
+    def polish_stream(self, text: str, mode: str, on_delta: Callable[[str], None]) -> str:
+        if mode != "ai":
+            raise ValueError("润色仅支持 AI 模式")
+        return self.ai.polish_stream(text, on_delta)
 
     def test_ai_connection(self) -> tuple[bool, str]:
         return self.ai.test_connection()

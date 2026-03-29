@@ -77,7 +77,14 @@ class TranslatorApp:
         self._active_popup_position: tuple[int, int] | None = None
         self._cursor_last_move_at = time.time()
         self._translate_request_seq = 0
+        self._active_translate_request_seq = 0
         self._active_popup_request_seq = 0
+        self._active_translation_text = ""
+        self._result_popup_source_text = ""
+        self._result_popup_result_text = ""
+        self._result_popup_title_var: tk.StringVar | None = None
+        self._result_popup_content_widget: tk.Text | None = None
+        self._result_popup_copy_button: tk.Button | None = None
 
         # Polling fallback: avoids relying only on low-level global hooks.
         self._fb_last_lbtn_down = False
@@ -696,22 +703,65 @@ class TranslatorApp:
             return
 
         mode = self.mode_var.get().strip().lower()
+        self._translate_request_seq += 1
+        req_id = self._translate_request_seq
+        self._active_translate_request_seq = req_id
+        self._active_translation_text = ""
+        self._set_result_text("")
         self.status_var.set("翻译中...")
         self.logger.info("Translate request action=%s mode=%s chars=%d popup=%s", action, mode, len(text), show_popup)
 
-        req_id = 0
         if show_popup:
-            self._translate_request_seq += 1
-            req_id = self._translate_request_seq
             self._active_popup_request_seq = req_id
-            self._active_popup_position = self._show_result_popup(text, "正在翻译，请稍候...", pending=True)
+            self._active_popup_position = self._show_result_popup(text, "", pending=True)
+        else:
+            self._active_popup_request_seq = 0
+            if self.result_popup_pending:
+                self._destroy_result_popup()
 
         def worker() -> None:
+            chunks: list[str] = []
+            buffered_chars = 0
+            last_flush_at = time.monotonic()
+
+            def flush_chunks() -> None:
+                nonlocal buffered_chars, last_flush_at
+                if not chunks:
+                    return
+                delta = "".join(chunks)
+                chunks.clear()
+                buffered_chars = 0
+                last_flush_at = time.monotonic()
+                self.event_queue.put(
+                    (
+                        "translate_chunk",
+                        {
+                            "text": text,
+                            "delta": delta,
+                            "mode": mode,
+                            "action": action,
+                            "show_popup": show_popup,
+                            "req_id": req_id,
+                        },
+                    )
+                )
+
+            def on_delta(chunk: str) -> None:
+                nonlocal buffered_chars, last_flush_at
+                if not chunk:
+                    return
+                chunks.append(chunk)
+                buffered_chars += len(chunk)
+                now = time.monotonic()
+                if buffered_chars >= 24 or "\n" in chunk or (now - last_flush_at) >= 0.08:
+                    flush_chunks()
+
             try:
                 if action == "polish":
-                    result = self.service.polish(text, mode)
+                    result = self.service.polish_stream(text, mode, on_delta)
                 else:
-                    result = self.service.translate(text, mode)
+                    result = self.service.translate_stream(text, mode, on_delta)
+                flush_chunks()
                 self.event_queue.put(
                     (
                         "translate_done",
@@ -726,12 +776,14 @@ class TranslatorApp:
                     )
                 )
             except Exception as exc:
+                flush_chunks()
                 self.logger.exception("Translate worker failed action=%s mode=%s", action, mode)
                 self.event_queue.put(
                     (
                         "translate_error",
                         {
                             "message": str(exc),
+                            "text": text,
                             "show_popup": show_popup,
                             "req_id": req_id,
                         },
@@ -886,17 +938,44 @@ class TranslatorApp:
                     self.logger.error("AI test failed: %s", message)
                     messagebox.showerror("AI 测试", message)
 
+            elif event == "translate_chunk":
+                data = payload
+                assert isinstance(data, dict)
+                req_id = int(data.get("req_id", 0))
+                if req_id != self._active_translate_request_seq:
+                    continue
+
+                delta = str(data.get("delta", ""))
+                if not delta:
+                    continue
+
+                src = str(data.get("text", ""))
+                action_name = str(data.get("action", "translate"))
+                mode_name = str(data.get("mode", self.mode_var.get()))
+                self._active_translation_text += delta
+                self._append_result_text(delta)
+                self.status_var.set(f"生成中 · {mode_name} · {action_name}")
+
+                if bool(data.get("show_popup")) and req_id == self._active_popup_request_seq:
+                    self._update_result_popup(src, self._active_translation_text, pending=True)
+
             elif event == "translate_done":
                 data = payload
                 assert isinstance(data, dict)
                 src = str(data["text"])
                 res = str(data["result"])
                 req_id = int(data.get("req_id", 0))
-                self._set_result_text(res)
-                self.history.add_record(str(data["action"]), str(data["mode"]), src, res)
-                self._load_history()
+                if req_id != self._active_translate_request_seq:
+                    continue
+
+                previous_result = self._active_translation_text
+                self._active_translation_text = res
+                if res != previous_result:
+                    self._set_result_text(res)
                 action_name = str(data["action"])
                 mode_name = str(data["mode"])
+                self.history.add_record(action_name, mode_name, src, res)
+                self._load_history()
                 self.status_var.set(f"完成 · {mode_name} · {action_name}")
                 self.logger.info(
                     "Translate done action=%s mode=%s src_chars=%d result_chars=%d",
@@ -925,16 +1004,31 @@ class TranslatorApp:
                     self._schedule_selection_icon()
 
                 if bool(data["show_popup"]) and req_id == self._active_popup_request_seq:
-                    self._show_result_popup(src, res, popup_pos=self._active_popup_position)
+                    if self.result_popup and self.result_popup.winfo_exists():
+                        self._update_result_popup(src, res, pending=False)
+                    else:
+                        self._show_result_popup(src, res, popup_pos=self._active_popup_position)
 
             elif event == "translate_error":
                 data = payload if isinstance(payload, dict) else {"message": str(payload), "show_popup": False, "req_id": 0}
                 message = str(data.get("message", "未知错误"))
                 req_id = int(data.get("req_id", 0))
+                if req_id != self._active_translate_request_seq:
+                    continue
+
+                src = str(data.get("text", ""))
                 self.status_var.set(message)
                 self.logger.error("Translate error: %s", message)
                 if bool(data.get("show_popup")) and req_id == self._active_popup_request_seq:
-                    self._show_result_popup("翻译失败", message, popup_pos=self._active_popup_position)
+                    popup_text = self._active_translation_text
+                    if popup_text:
+                        popup_text = f"{popup_text}\n\n[生成中断] {message}"
+                    else:
+                        popup_text = message
+                    if self.result_popup and self.result_popup.winfo_exists():
+                        self._update_result_popup(src or "翻译失败", popup_text, pending=False)
+                    else:
+                        self._show_result_popup(src or "翻译失败", popup_text, popup_pos=self._active_popup_position)
                 else:
                     messagebox.showerror("翻译失败", message)
 
@@ -1492,6 +1586,77 @@ class TranslatorApp:
 
         return False
 
+    def _set_text_widget_content(self, widget: tk.Text, text: str) -> None:
+        widget.config(state="normal")
+        widget.delete("1.0", "end")
+        if text:
+            widget.insert("1.0", text)
+        widget.config(state="disabled")
+
+    def _append_result_text(self, text: str) -> None:
+        if not text:
+            return
+        self.result_text.config(state="normal")
+        self.result_text.insert("end", text)
+        self.result_text.see("end")
+        self.result_text.config(state="disabled")
+
+    def _schedule_result_popup_auto_close(self, delay_ms: int = 4200) -> None:
+        if self.result_popup is None or not self.result_popup.winfo_exists():
+            return
+        if self.result_popup_auto_close_job:
+            try:
+                self.result_popup.after_cancel(self.result_popup_auto_close_job)
+            except Exception:
+                pass
+        self.result_popup_auto_close_job = self.result_popup.after(delay_ms, self._auto_close_result_popup_if_unpinned)
+
+    def _auto_close_result_popup_if_unpinned(self) -> None:
+        if self.result_popup is None or not self.result_popup.winfo_exists():
+            self.result_popup_auto_close_job = None
+            return
+        if self.result_popup_pinned:
+            self.result_popup_auto_close_job = None
+            return
+        if self.result_popup_pending or self.result_popup_dragging or self.result_popup_hovering:
+            self.result_popup_auto_close_job = self.result_popup.after(300, self._auto_close_result_popup_if_unpinned)
+            return
+        self.result_popup_auto_close_job = None
+        self._destroy_result_popup()
+
+    def _update_result_popup(self, source_text: str, result_text: str, pending: bool | None = None) -> None:
+        if self.result_popup is None or not self.result_popup.winfo_exists():
+            return
+
+        self._result_popup_source_text = source_text
+        self._result_popup_result_text = result_text
+        if pending is not None:
+            self.result_popup_pending = bool(pending)
+
+        if self._result_popup_title_var is not None:
+            self._result_popup_title_var.set("正在翻译..." if self.result_popup_pending else "翻译结果")
+
+        if self._result_popup_copy_button is not None and self._result_popup_copy_button.winfo_exists():
+            copy_state = "disabled" if self.result_popup_pending or not result_text.strip() else "normal"
+            self._result_popup_copy_button.config(state=copy_state)
+
+        if self._result_popup_content_widget is not None and self._result_popup_content_widget.winfo_exists():
+            display_text = result_text if result_text else ("正在翻译，请稍候..." if self.result_popup_pending else "")
+            self._set_text_widget_content(self._result_popup_content_widget, display_text)
+            self._result_popup_content_widget.see("end")
+
+        if self.result_popup_pending:
+            if self.result_popup_auto_close_job and self.result_popup:
+                try:
+                    self.result_popup.after_cancel(self.result_popup_auto_close_job)
+                except Exception:
+                    pass
+                self.result_popup_auto_close_job = None
+            return
+
+        if not self.result_popup_pinned and not self.result_popup_dragging and not self.result_popup_hovering:
+            self._schedule_result_popup_auto_close(4200)
+
     def _show_result_popup(
         self,
         source_text: str,
@@ -1515,15 +1680,15 @@ class TranslatorApp:
         else:
             popup_x, popup_y = int(popup_pos[0]), int(popup_pos[1])
 
-        popup.geometry(f"380x170+{popup_x}+{popup_y}")
+        popup.geometry(f"380x180+{popup_x}+{popup_y}")
 
         container = tk.Frame(popup, bg="#eaf2fb")
         container.pack(fill="both", expand=True, padx=8, pady=8)
 
         top = tk.Frame(container, bg="#eaf2fb")
         top.pack(fill="x")
-        title = "正在翻译..." if pending else "翻译结果"
-        title_label = tk.Label(top, text=title, bg="#eaf2fb", fg="#12314e", font=("Microsoft YaHei UI", 9, "bold"))
+        title_var = tk.StringVar(value=("正在翻译..." if pending else "翻译结果"))
+        title_label = tk.Label(top, textvariable=title_var, bg="#eaf2fb", fg="#12314e", font=("Microsoft YaHei UI", 9, "bold"))
         title_label.pack(side="left")
 
         pin_text = tk.StringVar(value=("取消固定" if self.result_popup_pinned else "固定"))
@@ -1532,36 +1697,48 @@ class TranslatorApp:
             self.result_popup_pinned = not self.result_popup_pinned
             pin_text.set("取消固定" if self.result_popup_pinned else "固定")
             self.status_var.set("气泡已固定" if self.result_popup_pinned else "气泡已取消固定")
+            if self.result_popup_pinned:
+                if self.result_popup_auto_close_job and self.result_popup:
+                    try:
+                        self.result_popup.after_cancel(self.result_popup_auto_close_job)
+                    except Exception:
+                        pass
+                    self.result_popup_auto_close_job = None
+            elif not self.result_popup_pending:
+                self._schedule_result_popup_auto_close(4200)
 
         def copy_result() -> None:
-            self._set_clipboard_text(result_text)
+            self._set_clipboard_text(self._result_popup_result_text)
             self.status_var.set("已复制翻译")
 
-        copy_state = "disabled" if pending else "normal"
         tk.Button(top, textvariable=pin_text, command=toggle_pin, bg="#d5e7fb", relief="flat").pack(side="right")
-        tk.Button(top, text="复制", command=copy_result, state=copy_state, bg="#d5e7fb", relief="flat").pack(side="right", padx=(0, 4))
+        copy_button = tk.Button(top, text="复制", command=copy_result, bg="#d5e7fb", relief="flat")
+        copy_button.pack(side="right", padx=(0, 4))
         tk.Button(top, text="×", command=self._destroy_result_popup, bg="#d5e7fb", relief="flat", width=2).pack(side="right", padx=(0, 4))
 
-        content = tk.Label(
+        content = tk.Text(
             container,
-            text=result_text[:320],
+            height=6,
+            wrap="word",
             bg="#eaf2fb",
             fg="#122335",
             font=("Microsoft YaHei UI", 10),
-            justify="left",
-            wraplength=350,
+            relief="flat",
+            highlightthickness=0,
             padx=6,
             pady=6,
+            state="disabled",
+            cursor="hand2",
         )
         content.pack(fill="both", expand=True)
 
         def open_detail(_event=None) -> None:
-            if pending:
+            if self.result_popup_pending:
                 return
             self._show_window()
             self.source_text.delete("1.0", "end")
-            self.source_text.insert("1.0", source_text)
-            self._set_result_text(result_text)
+            self.source_text.insert("1.0", self._result_popup_source_text)
+            self._set_result_text(self._result_popup_result_text)
             self.status_var.set("已展开完整翻译详情")
             self._destroy_result_popup()
 
@@ -1592,8 +1769,8 @@ class TranslatorApp:
             self.result_popup_dragging = False
             if self.result_popup and self.result_popup.winfo_exists():
                 self._active_popup_position = (self.result_popup.winfo_x(), self.result_popup.winfo_y())
-                if not pending and not self.result_popup_pinned and self.result_popup_auto_close_job is None:
-                    self.result_popup_auto_close_job = self.result_popup.after(4200, auto_close_if_unpinned)
+                if not self.result_popup_pending and not self.result_popup_pinned:
+                    self._schedule_result_popup_auto_close(4200)
 
         top.bind("<ButtonPress-1>", start_drag)
         top.bind("<B1-Motion>", on_drag)
@@ -1602,16 +1779,6 @@ class TranslatorApp:
         title_label.bind("<B1-Motion>", on_drag)
         title_label.bind("<ButtonRelease-1>", stop_drag)
         popup.bind("<ButtonRelease-1>", stop_drag)
-
-        def auto_close_if_unpinned() -> None:
-            if self.result_popup is None or not self.result_popup.winfo_exists():
-                return
-            if self.result_popup_pinned:
-                return
-            if self.result_popup_dragging or self.result_popup_hovering:
-                self.result_popup_auto_close_job = self.result_popup.after(300, auto_close_if_unpinned)
-                return
-            self._destroy_result_popup()
 
         def schedule_leave_close(_event=None) -> None:
             self.result_popup_hovering = False
@@ -1627,7 +1794,7 @@ class TranslatorApp:
                     self.result_popup.after_cancel(self.result_popup_leave_job)
                 except Exception:
                     pass
-            self.result_popup_leave_job = self.result_popup.after(650, auto_close_if_unpinned)
+            self.result_popup_leave_job = self.result_popup.after(650, self._auto_close_result_popup_if_unpinned)
 
         def cancel_leave_close(_event=None) -> None:
             self.result_popup_hovering = True
@@ -1650,9 +1817,10 @@ class TranslatorApp:
         self.result_popup_hovering = False
         self.result_popup_pending = bool(pending)
         self._active_popup_position = (popup_x, popup_y)
-
-        if not pending:
-            self.result_popup_auto_close_job = popup.after(4200, auto_close_if_unpinned)
+        self._result_popup_title_var = title_var
+        self._result_popup_content_widget = content
+        self._result_popup_copy_button = copy_button
+        self._update_result_popup(source_text, result_text, pending=pending)
 
         return popup_x, popup_y
 
@@ -1672,15 +1840,17 @@ class TranslatorApp:
         self.result_popup_dragging = False
         self.result_popup_hovering = False
         self.result_popup_pending = False
+        self._result_popup_source_text = ""
+        self._result_popup_result_text = ""
+        self._result_popup_title_var = None
+        self._result_popup_content_widget = None
+        self._result_popup_copy_button = None
         if reset_pin:
             self.result_popup_pinned = False
             self._active_popup_position = None
 
     def _set_result_text(self, text: str) -> None:
-        self.result_text.config(state="normal")
-        self.result_text.delete("1.0", "end")
-        self.result_text.insert("1.0", text)
-        self.result_text.config(state="disabled")
+        self._set_text_widget_content(self.result_text, text)
 
     def _load_history(self) -> None:
         self.history_rows = self.history.list_recent(limit=120)
