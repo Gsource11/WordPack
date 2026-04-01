@@ -23,15 +23,14 @@ class InteractionConfig:
     selection_enabled: bool = True
     selection_trigger_mode: str = "icon"  # icon | double_ctrl
     selection_icon_trigger: str = "click"  # click | hover
-    selection_icon_cancel_sensitivity: str = "medium"  # low | medium | high
-    selection_hotkey_enabled: bool = True
-    screenshot_hotkey_enabled: bool = True
+    screenshot_hotkey: str = "Ctrl+Alt+S"
     selection_icon_delay_ms: int = 1500
 
 
 @dataclass
 class AppConfig:
     translation_mode: str = "offline"
+    theme_mode: str = "system"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     offline: OfflineConfig = field(default_factory=OfflineConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
@@ -60,6 +59,7 @@ class ConfigStore:
 
         cfg = AppConfig(
             translation_mode=raw.get("translation_mode", "offline"),
+            theme_mode=str(raw.get("theme_mode", "system") or "system"),
             openai=OpenAIConfig(
                 base_url=openai_raw.get("base_url", "https://api.openai.com/v1"),
                 api_key=openai_raw.get("api_key", ""),
@@ -73,15 +73,21 @@ class ConfigStore:
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
                 selection_trigger_mode=str(interaction_raw.get("selection_trigger_mode", "icon") or "icon"),
                 selection_icon_trigger=str(interaction_raw.get("selection_icon_trigger", "click") or "click"),
-                selection_icon_cancel_sensitivity=str(interaction_raw.get("selection_icon_cancel_sensitivity", "medium") or "medium"),
-                selection_hotkey_enabled=bool(interaction_raw.get("selection_hotkey_enabled", True)),
-                screenshot_hotkey_enabled=bool(interaction_raw.get("screenshot_hotkey_enabled", True)),
+                screenshot_hotkey=str(
+                    interaction_raw.get(
+                        "screenshot_hotkey",
+                        "Ctrl+Alt+S" if bool(interaction_raw.get("screenshot_hotkey_enabled", True)) else "",
+                    )
+                    or ""
+                ).strip(),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
             ),
         )
 
         if cfg.translation_mode not in {"offline", "ai"}:
             cfg.translation_mode = "offline"
+        if cfg.theme_mode not in {"system", "light", "dark"}:
+            cfg.theme_mode = "system"
 
         if not cfg.offline.preferred_direction:
             cfg.offline.preferred_direction = "auto"
@@ -90,8 +96,7 @@ class ConfigStore:
             cfg.interaction.selection_trigger_mode = "icon"
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"
-        if cfg.interaction.selection_icon_cancel_sensitivity not in {"low", "medium", "high"}:
-            cfg.interaction.selection_icon_cancel_sensitivity = "medium"
+        cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
         cfg.interaction.selection_icon_delay_ms = max(300, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
 
         return cfg

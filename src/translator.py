@@ -66,16 +66,28 @@ class ArgosOfflineTranslator:
         self._translate_mod = None
         self._package_mod = None
         self._init_error = ""
+        self._import_attempted = False
+
+    def _ensure_runtime(self) -> bool:
+        if self._translate_mod is not None and self._package_mod is not None:
+            return True
+        if self._import_attempted:
+            return False
+
+        self._import_attempted = True
         try:
             import argostranslate.package as argos_package  # type: ignore
             import argostranslate.translate as argos_translate  # type: ignore
 
             self._translate_mod = argos_translate
             self._package_mod = argos_package
+            self._init_error = ""
+            return True
         except Exception as exc:
             self._translate_mod = None
             self._package_mod = None
             self._init_error = f"{type(exc).__name__}: {exc}"
+            return False
 
     @staticmethod
     def _contains_chinese(text: str) -> bool:
@@ -100,7 +112,7 @@ class ArgosOfflineTranslator:
         return chunks
 
     def _get_languages(self) -> list[Any]:
-        if self._translate_mod is None:
+        if not self._ensure_runtime():
             return []
         try:
             return list(self._translate_mod.get_installed_languages())
@@ -162,7 +174,12 @@ class ArgosOfflineTranslator:
         items.sort(key=lambda x: x["direction"])
         return items
 
-    def runtime_ready(self) -> bool:
+    def import_attempted(self) -> bool:
+        return bool(self._import_attempted)
+
+    def runtime_ready(self, probe: bool = False) -> bool:
+        if probe:
+            self._ensure_runtime()
         return self._translate_mod is not None and self._package_mod is not None
 
     def init_error(self) -> str:
@@ -172,7 +189,7 @@ class ArgosOfflineTranslator:
         return len(self.list_directions()) > 0
 
     def install_model_file(self, model_path: str) -> str:
-        if self._package_mod is None:
+        if not self._ensure_runtime() or self._package_mod is None:
             raise RuntimeError("离线模型功能不可用：当前构建未包含 argostranslate 运行库。请使用发布版 exe。")
 
         path = Path(model_path)
@@ -224,7 +241,7 @@ class ArgosOfflineTranslator:
         return selected
 
     def translate(self, text: str, preferred_direction: str = "auto") -> str:
-        if self._translate_mod is None:
+        if not self._ensure_runtime() or self._translate_mod is None:
             raise RuntimeError("未安装 argostranslate")
 
         translation = self._select_translation(text, preferred_direction)
@@ -258,12 +275,14 @@ class OfflineTranslator:
     def import_model_file(self, model_path: str) -> str:
         return self.argos.install_model_file(model_path)
 
-    def runtime_ready(self) -> bool:
-        return self.argos.runtime_ready()
+    def runtime_ready(self, probe: bool = False) -> bool:
+        return self.argos.runtime_ready(probe=probe)
 
-    def runtime_hint(self) -> str:
-        if self.runtime_ready():
+    def runtime_hint(self, probe: bool = False) -> str:
+        if self.runtime_ready(probe=probe):
             return "离线模型运行库已就绪"
+        if not probe and not self.argos.import_attempted():
+            return "离线模型运行库将按需检测；打开设置页或首次使用离线模型时再加载。"
 
         exe = sys.executable
         err = self.argos.init_error()
@@ -275,11 +294,14 @@ class OfflineTranslator:
             f"{suffix}"
         )
 
-    def diagnostics(self) -> str:
+    def diagnostics(self, probe: bool = False) -> str:
         preferred = self._preferred_direction()
+        if not probe and not self.argos.import_attempted():
+            return "离线模式: 词典兜底已就绪，Argos 运行库按需加载。"
+
         items = self.argos.list_directions()
 
-        if not self.runtime_ready():
+        if not self.runtime_ready(probe=probe):
             return "离线模式: Argos 运行库缺失，当前仅词典兜底（发布版会内置）。"
 
         if not items:
@@ -297,7 +319,7 @@ class OfflineTranslator:
         if not normalized:
             return ""
 
-        if self.runtime_ready():
+        if self.runtime_ready(probe=True):
             items = self.argos.list_directions()
             if items:
                 try:
@@ -444,6 +466,7 @@ class OpenAICompatibleTranslator:
         timeout_sec: int,
         parse_line: Callable[[str], str],
         on_delta: Callable[[str], None],
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         req = request.Request(
             url=url,
@@ -455,6 +478,8 @@ class OpenAICompatibleTranslator:
         try:
             with request.urlopen(req, timeout=timeout_sec) as resp:
                 while True:
+                    if should_cancel and should_cancel():
+                        raise RuntimeError("请求已取消")
                     raw_line = resp.readline()
                     if not raw_line:
                         break
@@ -565,6 +590,7 @@ class OpenAICompatibleTranslator:
         temperature: float,
         timeout_sec: int,
         on_delta: Callable[[str], None],
+        should_cancel: Callable[[], bool] | None = None,
         max_tokens: int = 600,
     ) -> str:
         v1_root = base_url.rstrip("/")
@@ -583,7 +609,7 @@ class OpenAICompatibleTranslator:
             payload["think"] = False
 
         headers = self._build_headers(api_key)
-        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_openai_stream_line, on_delta)
+        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_openai_stream_line, on_delta, should_cancel)
 
     def _chat_ollama_native(
         self,
@@ -626,6 +652,7 @@ class OpenAICompatibleTranslator:
         temperature: float,
         timeout_sec: int,
         on_delta: Callable[[str], None],
+        should_cancel: Callable[[], bool] | None = None,
         num_predict: int = 600,
     ) -> str:
         native_base = base_url[:-3] if base_url.endswith("/v1") else base_url
@@ -638,7 +665,7 @@ class OpenAICompatibleTranslator:
             "options": {"temperature": temperature, "num_predict": num_predict},
         }
         headers = {"Content-Type": "application/json"}
-        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_ollama_stream_line, on_delta)
+        return self._stream_json_lines(url, payload, headers, timeout_sec, self._parse_ollama_stream_line, on_delta, should_cancel)
 
     def _run_backend(
         self,
@@ -648,6 +675,7 @@ class OpenAICompatibleTranslator:
         stream_call: Callable[[int, Callable[[str], None]], str],
         sync_call: Callable[[int], str],
         on_delta: Callable[[str], None] | None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         def emit_full_result(result: str) -> str:
             if on_delta and result:
@@ -660,6 +688,8 @@ class OpenAICompatibleTranslator:
 
             def relay(chunk: str) -> None:
                 nonlocal emitted
+                if should_cancel and should_cancel():
+                    raise RuntimeError("请求已取消")
                 emitted = True
                 if on_delta:
                     on_delta(chunk)
@@ -688,6 +718,7 @@ class OpenAICompatibleTranslator:
         temperature: float = 0.2,
         purpose: str = "translate",
         on_delta: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         cfg: AppConfig = self.cfg_getter()
         base_url = cfg.openai.base_url.strip().rstrip("/")
@@ -715,10 +746,11 @@ class OpenAICompatibleTranslator:
                 error_message="Ollama 调用失败",
                 use_stream=use_stream,
                 stream_call=lambda timeout, relay: self._chat_ollama_native_stream(
-                    base_url, model, messages, temperature, timeout, relay
+                    base_url, model, messages, temperature, timeout, relay, should_cancel
                 ),
                 sync_call=lambda timeout: self._chat_ollama_native(base_url, model, messages, temperature, timeout),
                 on_delta=on_delta,
+                should_cancel=should_cancel,
             )
 
         def try_openai() -> str:
@@ -727,12 +759,13 @@ class OpenAICompatibleTranslator:
                 error_message="OpenAI兼容接口调用失败",
                 use_stream=use_stream,
                 stream_call=lambda timeout, relay: self._chat_openai_compatible_stream(
-                    base_url, api_key, model, messages, temperature, timeout, relay
+                    base_url, api_key, model, messages, temperature, timeout, relay, should_cancel
                 ),
                 sync_call=lambda timeout: self._chat_openai_compatible(
                     base_url, api_key, model, messages, temperature, timeout
                 ),
                 on_delta=on_delta,
+                should_cancel=should_cancel,
             )
 
         if is_local:
@@ -783,7 +816,7 @@ class OpenAICompatibleTranslator:
         ]
         return self._chat(messages, temperature=0.15, purpose="translate")
 
-    def translate_stream(self, text: str, on_delta: Callable[[str], None]) -> str:
+    def translate_stream(self, text: str, on_delta: Callable[[str], None], should_cancel: Callable[[], bool] | None = None) -> str:
         messages = [
             {
                 "role": "system",
@@ -795,7 +828,7 @@ class OpenAICompatibleTranslator:
             },
             {"role": "user", "content": text.strip()},
         ]
-        return self._chat(messages, temperature=0.15, purpose="translate", on_delta=on_delta)
+        return self._chat(messages, temperature=0.15, purpose="translate", on_delta=on_delta, should_cancel=should_cancel)
 
     def polish(self, text: str) -> str:
         messages = [
@@ -810,7 +843,7 @@ class OpenAICompatibleTranslator:
         ]
         return self._chat(messages, temperature=0.35, purpose="polish")
 
-    def polish_stream(self, text: str, on_delta: Callable[[str], None]) -> str:
+    def polish_stream(self, text: str, on_delta: Callable[[str], None], should_cancel: Callable[[], bool] | None = None) -> str:
         messages = [
             {
                 "role": "system",
@@ -821,7 +854,7 @@ class OpenAICompatibleTranslator:
             },
             {"role": "user", "content": text.strip()},
         ]
-        return self._chat(messages, temperature=0.35, purpose="polish", on_delta=on_delta)
+        return self._chat(messages, temperature=0.35, purpose="polish", on_delta=on_delta, should_cancel=should_cancel)
 
     def test_connection(self) -> tuple[bool, str]:
         cfg: AppConfig = self.cfg_getter()
@@ -851,13 +884,15 @@ class OpenAICompatibleTranslator:
         try:
             probe = self._chat(
                 [
-                    {"role": "system", "content": "你是连接测试助手。仅返回 OK。"},
-                    {"role": "user", "content": "ping"},
+                    {"role": "system", "content": "你是连接测试助手。如果你接收到用户消息，只回复“收到”。"},
+                    {"role": "user", "content": "如果你接收到我的信息，请说收到"},
                 ],
                 temperature=0.0,
                 purpose="test",
             )
-            return True, f"AI 连接成功，模型响应正常（{probe[:40]}）"
+            if "收到" in probe:
+                return True, f"AI 连接成功，模型响应正常（{probe[:40]}）"
+            return False, f"AI 连接异常：已收到响应，但内容不符合预期（{probe[:60]}）"
         except Exception as exc:
             return False, f"AI 连接失败: {exc}"
 
@@ -872,9 +907,15 @@ class TranslationService:
             return self.ai.translate(text)
         return self.offline.translate(text)
 
-    def translate_stream(self, text: str, mode: str, on_delta: Callable[[str], None]) -> str:
+    def translate_stream(
+        self,
+        text: str,
+        mode: str,
+        on_delta: Callable[[str], None],
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> str:
         if mode == "ai":
-            return self.ai.translate_stream(text, on_delta)
+            return self.ai.translate_stream(text, on_delta, should_cancel=should_cancel)
         result = self.offline.translate(text)
         if result:
             on_delta(result)
@@ -885,16 +926,22 @@ class TranslationService:
             raise ValueError("润色仅支持 AI 模式")
         return self.ai.polish(text)
 
-    def polish_stream(self, text: str, mode: str, on_delta: Callable[[str], None]) -> str:
+    def polish_stream(
+        self,
+        text: str,
+        mode: str,
+        on_delta: Callable[[str], None],
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> str:
         if mode != "ai":
             raise ValueError("润色仅支持 AI 模式")
-        return self.ai.polish_stream(text, on_delta)
+        return self.ai.polish_stream(text, on_delta, should_cancel=should_cancel)
 
     def test_ai_connection(self) -> tuple[bool, str]:
         return self.ai.test_connection()
 
-    def offline_diagnostics(self) -> str:
-        return self.offline.diagnostics()
+    def offline_diagnostics(self, probe: bool = False) -> str:
+        return self.offline.diagnostics(probe=probe)
 
     def list_offline_models(self) -> list[dict[str, str]]:
         return self.offline.list_models()
@@ -902,11 +949,11 @@ class TranslationService:
     def import_offline_model(self, model_path: str) -> str:
         return self.offline.import_model_file(model_path)
 
-    def offline_runtime_ready(self) -> bool:
-        return self.offline.runtime_ready()
+    def offline_runtime_ready(self, probe: bool = False) -> bool:
+        return self.offline.runtime_ready(probe=probe)
 
-    def offline_runtime_hint(self) -> str:
-        return self.offline.runtime_hint()
+    def offline_runtime_hint(self, probe: bool = False) -> str:
+        return self.offline.runtime_hint(probe=probe)
 
 
 

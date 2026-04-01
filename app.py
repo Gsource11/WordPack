@@ -9,9 +9,9 @@ def main() -> None:
     logger.info("Starting %s (%s)", APP_NAME_ZH, APP_NAME_EN)
 
     try:
-        from src.ui import TranslatorApp
+        from src.ui_webview.window import WordPackWebviewApp
 
-        app = TranslatorApp()
+        app = WordPackWebviewApp()
         app.run()
     except Exception:
         logger.exception("Application exited with fatal error")

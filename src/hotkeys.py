@@ -4,6 +4,7 @@ import threading
 import time
 from ctypes import POINTER, WINFUNCTYPE, Structure, byref, cast, c_void_p, windll
 from ctypes import wintypes
+from typing import Callable
 
 
 user32 = windll.user32
@@ -20,13 +21,69 @@ VK_RCONTROL = 0xA3
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
 
-HOTKEY_ID_TRANSLATE = 1001
-HOTKEY_ID_TOGGLE_WINDOW = 1002
 HOTKEY_ID_SCREENSHOT = 1003
-VK_T = 0x54
-VK_H = 0x48
-VK_S = 0x53
+
+HOTKEY_EVENT_MAP = {
+    HOTKEY_ID_SCREENSHOT: "screenshot_translate",
+}
+
+KEY_NAME_TO_VK = {chr(code): code for code in range(ord("A"), ord("Z") + 1)}
+KEY_NAME_TO_VK.update({str(num): ord(str(num)) for num in range(10)})
+KEY_NAME_TO_VK.update({f"F{index}": 0x6F + index for index in range(1, 13)})
+
+
+def normalize_shortcut(shortcut: str) -> str:
+    raw = str(shortcut or "").strip()
+    if not raw:
+        return ""
+
+    tokens = [token.strip().upper() for token in raw.replace(" ", "").split("+") if token.strip()]
+    if not tokens:
+        return ""
+
+    modifiers: list[str] = []
+    key = ""
+    for token in tokens:
+        alias = {"CONTROL": "CTRL", "CMD": "CTRL", "OPTION": "ALT"}.get(token, token)
+        if alias in {"CTRL", "ALT", "SHIFT"}:
+            if alias not in modifiers:
+                modifiers.append(alias)
+            continue
+        if key:
+            return ""
+        if alias not in KEY_NAME_TO_VK:
+            return ""
+        key = alias
+
+    if not key or not modifiers:
+        return ""
+
+    ordered = [name for name in ("CTRL", "ALT", "SHIFT") if name in modifiers]
+    return "+".join([*ordered, key])
+
+
+def parse_shortcut(shortcut: str) -> tuple[int, int, str] | None:
+    normalized = normalize_shortcut(shortcut)
+    if not normalized:
+        return None
+
+    tokens = normalized.split("+")
+    key = tokens[-1]
+    modifiers = 0
+    for token in tokens[:-1]:
+        if token == "CTRL":
+            modifiers |= MOD_CONTROL
+        elif token == "ALT":
+            modifiers |= MOD_ALT
+        elif token == "SHIFT":
+            modifiers |= MOD_SHIFT
+
+    vk = KEY_NAME_TO_VK.get(key)
+    if vk is None:
+        return None
+    return modifiers, vk, normalized
 
 
 class POINT(Structure):
@@ -58,14 +115,16 @@ LowLevelKeyboardProc = WINFUNCTYPE(wintypes.LPARAM, wintypes.INT, wintypes.WPARA
 
 
 class HotkeyManager:
-    def __init__(self, callback) -> None:
+    def __init__(self, callback, shortcut_getter: Callable[[], dict[str, str]] | None = None) -> None:
         self.callback = callback
+        self.shortcut_getter = shortcut_getter or (lambda: {})
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
         self._stop_event = threading.Event()
         self._keyboard_hook = None
         self._keyboard_proc = None
         self._last_ctrl_at = 0.0
+        self._registered_hotkeys: list[int] = []
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -83,13 +142,21 @@ class HotkeyManager:
 
     def _loop(self) -> None:
         self._thread_id = kernel32.GetCurrentThreadId()
+        shortcut_map = {
+            "translate_selection": "",
+            "screenshot_translate": "",
+        }
+        shortcut_map.update(self.shortcut_getter() or {})
 
-        if not user32.RegisterHotKey(None, HOTKEY_ID_TRANSLATE, MOD_CONTROL | MOD_ALT, VK_T):
-            self.callback("status", "全局热键注册失败：Ctrl+Alt+T 已被占用")
-        if not user32.RegisterHotKey(None, HOTKEY_ID_TOGGLE_WINDOW, MOD_CONTROL | MOD_ALT, VK_H):
-            self.callback("status", "全局热键注册失败：Ctrl+Alt+H 已被占用")
-        if not user32.RegisterHotKey(None, HOTKEY_ID_SCREENSHOT, MOD_CONTROL | MOD_ALT, VK_S):
-            self.callback("status", "全局热键注册失败：Ctrl+Alt+S 已被占用")
+        for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
+            parsed = parse_shortcut(shortcut_map.get(event_name, ""))
+            if not parsed:
+                continue
+            modifiers, vk, label = parsed
+            if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                self._registered_hotkeys.append(hotkey_id)
+            else:
+                self.callback("status", f"全局热键注册失败：{label} 已被占用")
 
         self._keyboard_proc = LowLevelKeyboardProc(self._keyboard_callback)
         self._keyboard_hook = user32.SetWindowsHookExW(
@@ -105,12 +172,10 @@ class HotkeyManager:
             if code <= 0:
                 break
 
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_TRANSLATE:
-                self.callback("translate_selection", None)
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_TOGGLE_WINDOW:
-                self.callback("toggle_window", None)
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_SCREENSHOT:
-                self.callback("screenshot_translate", None)
+            if msg.message == WM_HOTKEY:
+                event_name = HOTKEY_EVENT_MAP.get(int(msg.wParam))
+                if event_name:
+                    self.callback(event_name, None)
 
             user32.TranslateMessage(byref(msg))
             user32.DispatchMessageW(byref(msg))
@@ -118,9 +183,9 @@ class HotkeyManager:
         if self._keyboard_hook:
             user32.UnhookWindowsHookEx(self._keyboard_hook)
             self._keyboard_hook = None
-        user32.UnregisterHotKey(None, HOTKEY_ID_TRANSLATE)
-        user32.UnregisterHotKey(None, HOTKEY_ID_TOGGLE_WINDOW)
-        user32.UnregisterHotKey(None, HOTKEY_ID_SCREENSHOT)
+        for hotkey_id in self._registered_hotkeys:
+            user32.UnregisterHotKey(None, hotkey_id)
+        self._registered_hotkeys.clear()
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
         if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
