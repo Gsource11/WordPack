@@ -174,17 +174,8 @@ class WordPackWebviewApp:
     def _shortcut_descriptions(self) -> list[str]:
         screenshot = normalize_shortcut(self.config.interaction.screenshot_hotkey)
         items: list[str] = []
-        if selection:
-            items.append(f"{selection} 划词翻译")
         if screenshot:
             items.append(f"{screenshot} 截图翻译")
-        return items
-
-    def _shortcut_descriptions(self) -> list[str]:
-        screenshot = normalize_shortcut(self.config.interaction.screenshot_hotkey)
-        items: list[str] = []
-        if screenshot:
-            items.append(f"{screenshot} 鎴浘缈昏瘧")
         return items
 
     def _current_main_geometry(self) -> tuple[int, int, int, int] | None:
@@ -586,10 +577,6 @@ class WordPackWebviewApp:
         if notify:
             self.bridge.send("main", "status", {"text": text})
 
-    def translate_from_window(self, kind: str, text: str, action: str) -> dict[str, Any]:
-        show_bubble = kind in {"bubble", "icon"}
-        return self._start_translate(text=text, action=action or "翻译", show_bubble=show_bubble)
-
     def _cancel_active_translation(self, message: str = "翻译已取消") -> bool:
         with self.lock:
             req_id = self._active_translate_request_seq
@@ -618,22 +605,11 @@ class WordPackWebviewApp:
             self.close_window("bubble")
         return True
 
-    def _cancel_active_translation(self) -> bool:
-        with self.lock:
-            req_id = self._active_translate_request_seq
-            cancel_event = self._active_translate_cancel
-            if req_id <= 0 or cancel_event is None or cancel_event.is_set():
-                return False
-            cancel_event.set()
-            self._active_translate_request_seq = 0
-            self._active_translate_shows_bubble = False
-        return True
-
     def translate_from_window(self, kind: str, text: str, action: str) -> dict[str, Any]:
         show_bubble = kind in {"bubble", "icon"}
         return self._start_translate(
             text=text,
-            action=action or "缈昏瘧",
+            action=action or "翻译",
             show_bubble=show_bubble,
             update_main=(kind == "main"),
         )
@@ -1255,13 +1231,6 @@ class WordPackWebviewApp:
     def _estimate_bubble_height(self, _source_text: str, result_text: str) -> int:
         del result_text
         return self.BUBBLE_HEIGHT
-        bounds = get_virtual_screen_bounds()
-        visible_text = (result_text or "").strip()
-        if not visible_text:
-            visible_text = "正在翻译"
-        result_lines = max(4, min(11, (max(len(visible_text), 36) // 20) + 1))
-        max_height = max(220, min(bounds.height - 48, 520))
-        return max(220, min(max_height, 108 + (result_lines * 22)))
 
     def _bubble_position(self, anchor: tuple[int, int] | None, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()
@@ -1316,13 +1285,6 @@ class WordPackWebviewApp:
             if not self._bubble_state.pending:
                 self._schedule_bubble_auto_hide()
 
-        self.bridge.send("bubble", "bubble-updated", {"themeMode": self._resolved_theme_mode(), "bubble": payload})
-        return {"ok": True, "bubble": payload}
-
-    def toggle_bubble_pin(self) -> dict[str, Any]:
-        with self.lock:
-            self._bubble_state.pinned = not self._bubble_state.pinned
-            payload = self._bubble_state.to_payload()
         self.bridge.send("bubble", "bubble-updated", {"themeMode": self._resolved_theme_mode(), "bubble": payload})
         return {"ok": True, "bubble": payload}
 
