@@ -84,8 +84,6 @@ class ConfigStore:
             ),
         )
 
-        if cfg.translation_mode == "offline":
-            cfg.translation_mode = "argos"
         if cfg.translation_mode not in {"argos", "ai"}:
             cfg.translation_mode = "argos"
         if cfg.theme_mode not in {"system", "light", "dark"}:

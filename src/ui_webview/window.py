@@ -513,8 +513,6 @@ class WordPackWebviewApp:
     def set_translation_mode(self, mode: str) -> dict[str, Any]:
         with self.lock:
             value = str(mode or "").strip().lower()
-            if value == "offline":
-                value = "argos"
             if value not in {"argos", "ai"}:
                 value = "argos"
             self.config.translation_mode = value
@@ -884,9 +882,6 @@ class WordPackWebviewApp:
         message = "已复制内容" if ok else "复制失败"
         self.set_status(message)
         return {"ok": ok, "message": message}
-
-    def get_clipboard_text(self) -> str:
-        return get_clipboard_text() or ""
 
     def clear_history(self) -> dict[str, Any]:
         self.history.clear()
@@ -1378,22 +1373,6 @@ class WordPackWebviewApp:
         self._hide_main_after_zoom_close = False
         return {"ok": True}
 
-    def resize_bubble(self, height: int) -> dict[str, Any]:
-        if self.bubble_window is None:
-            return {"ok": False}
-        del height
-        new_height = self.BUBBLE_HEIGHT
-        with self.lock:
-            self._bubble_state.height = new_height
-            x = self._bubble_state.x or get_cursor_position()[0]
-            y = self._bubble_state.y or get_cursor_position()[1]
-        try:
-            self.bubble_window.resize(self.BUBBLE_WIDTH, new_height)
-            self.bubble_window.move(x, y)
-        except Exception:
-            self.logger.exception("Failed to resize bubble window")
-        return {"ok": True}
-
     def _schedule_bubble_auto_hide(self, delay_sec: float = 4.2) -> None:
         self._cancel_bubble_hide_timer()
         self._bubble_hide_timer = threading.Timer(delay_sec, self._auto_close_bubble_if_allowed)
@@ -1437,14 +1416,6 @@ class WordPackWebviewApp:
             return {"ok": False, "message": message}
 
         self._selection_candidate.text = text
-        return self._start_translate(text=text, action="划词翻译", show_bubble=True)
-
-    def _translate_selected_direct(self, silent_if_empty: bool = False) -> dict[str, Any]:
-        text = self._capture_selected_text(self._selection_candidate.payload)
-        if not text:
-            if not silent_if_empty:
-                self.set_status("未检测到可翻译文本")
-            return {"ok": False, "message": "未检测到可翻译文本"}
         return self._start_translate(text=text, action="划词翻译", show_bubble=True)
 
     def _capture_selected_text(self, payload: dict[str, int] | None) -> str:
@@ -1559,9 +1530,6 @@ class WordPackWebviewApp:
 
         if event == "status":
             self.set_status(str(payload))
-            return
-
-        if event == "translate_selection":
             return
 
         if event == "double_ctrl_selection":
@@ -1733,17 +1701,6 @@ class WordPackWebviewApp:
                 self.logger.exception("Failed to close %s window", kind)
 
         return {"ok": True}
-
-    def minimize_window(self, kind: str) -> dict[str, Any]:
-        window = getattr(self, f"{kind}_window", None)
-        if window is None:
-            return {"ok": False}
-        try:
-            window.minimize()
-            return {"ok": True}
-        except Exception:
-            self.logger.exception("Failed to minimize %s window", kind)
-            return {"ok": False}
 
     def _start_input_polling(self) -> None:
         if self._input_poll_thread is not None and self._input_poll_thread.is_alive():

@@ -143,7 +143,6 @@ class HotkeyManager:
     def _loop(self) -> None:
         self._thread_id = kernel32.GetCurrentThreadId()
         shortcut_map = {
-            "translate_selection": "",
             "screenshot_translate": "",
         }
         shortcut_map.update(self.shortcut_getter() or {})

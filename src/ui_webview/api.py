@@ -38,14 +38,8 @@ class WindowApi:
     def copy_text(self, text: str) -> dict[str, Any]:
         return self._controller.copy_text(text)
 
-    def paste_clipboard(self) -> dict[str, Any]:
-        return {"text": self._controller.get_clipboard_text()}
-
     def clear_history(self) -> dict[str, Any]:
         return self._controller.clear_history()
-
-    def load_history(self) -> dict[str, Any]:
-        return {"history": self._controller.get_history_rows()}
 
     def load_settings(self) -> dict[str, Any]:
         return self._controller.get_settings_payload(probe_runtime=True)
@@ -63,14 +57,8 @@ class WindowApi:
     def set_theme(self, theme: str) -> dict[str, Any]:
         return self._controller.set_theme(theme)
 
-    def request_screenshot_translate(self) -> dict[str, Any]:
-        return self._controller.start_screenshot_capture(show_bubble=True)
-
     def close_window(self) -> dict[str, Any]:
         return self._controller.close_window(self.kind)
-
-    def minimize_window(self) -> dict[str, Any]:
-        return self._controller.minimize_window(self.kind)
 
     def toggle_bubble_pin(self) -> dict[str, Any]:
         return self._controller.toggle_bubble_pin()
@@ -84,14 +72,8 @@ class WindowApi:
     def close_zoom_panel(self) -> dict[str, Any]:
         return self._controller.close_zoom_panel()
 
-    def resize_bubble(self, height: int) -> dict[str, Any]:
-        return self._controller.resize_bubble(height)
-
     def trigger_selection_translate(self) -> dict[str, Any]:
         return self._controller.trigger_selection_translate()
-
-    def close_icon(self) -> dict[str, Any]:
-        return self._controller.close_window("icon")
 
     def cancel_screenshot_selection(self) -> dict[str, Any]:
         return self._controller.cancel_screenshot_capture()
