@@ -35,10 +35,12 @@ from src.ui_webview.state import BubbleState, ScreenshotSession, SelectionCandid
 
 
 class WordPackWebviewApp:
+    MAIN_WINDOW_BG = "#c4c6ca"
+    BUBBLE_WINDOW_BG = "#c4c6ca"
     MAIN_WIDTH = 468
     MAIN_HEIGHT = 760
-    MAIN_MIN_HEIGHT = 420
-    MAIN_COMPACT_HEIGHT = 500
+    MAIN_MIN_HEIGHT = 360
+    MAIN_COMPACT_HEIGHT = 430
     BUBBLE_WIDTH = 408
     BUBBLE_HEIGHT = 272
     ICON_WIDTH = 34
@@ -235,7 +237,10 @@ class WordPackWebviewApp:
             "focus": focus,
             "easy_drag": False,
             "text_select": True,
-            "background_color": "#eef1ec",
+            "background_color": (
+                self.MAIN_WINDOW_BG if kind == "main"
+                else (self.BUBBLE_WINDOW_BG if kind == "bubble" else "#eef1ec")
+            ),
             "transparent": transparent,
         }
         if min_size is not None:
@@ -616,6 +621,10 @@ class WordPackWebviewApp:
             show_bubble=show_bubble,
             update_main=(kind == "main"),
         )
+
+    def cancel_translation(self) -> dict[str, Any]:
+        cancelled = self._cancel_active_translation("翻译已取消")
+        return {"ok": True, "cancelled": bool(cancelled)}
 
     def _start_translate(self, text: str, action: str, show_bubble: bool, update_main: bool | None = None) -> dict[str, Any]:
         source_text = str(text or "").strip()

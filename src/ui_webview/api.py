@@ -29,6 +29,9 @@ class WindowApi:
     def translate(self, text: str, action: str = "翻译") -> dict[str, Any]:
         return self._controller.translate_from_window(self.kind, text, action)
 
+    def cancel_translation(self) -> dict[str, Any]:
+        return self._controller.cancel_translation()
+
     def set_mode(self, mode: str) -> dict[str, Any]:
         return self._controller.set_translation_mode(mode)
 

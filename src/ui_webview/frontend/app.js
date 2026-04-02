@@ -28,6 +28,7 @@
     sourceText: "",
     resultText: "",
     pending: false,
+    mainReqId: 0,
     testingAi: false,
     aiTestState: "idle",
     notice: null,
@@ -128,12 +129,41 @@
     );
   }
 
+  function measureMainCompactHeight() {
+    const card = document.querySelector(".window-card");
+    if (!card) return null;
+    const style = window.getComputedStyle(card);
+    const children = Array.from(card.children).filter((node) => {
+      const elementStyle = window.getComputedStyle(node);
+      return elementStyle.display !== "none";
+    });
+    if (!children.length) return null;
+    const rowGap = Number.parseFloat(style.rowGap || style.gap || "0") || 0;
+    const borderTop = Number.parseFloat(style.borderTopWidth || "0") || 0;
+    const borderBottom = Number.parseFloat(style.borderBottomWidth || "0") || 0;
+    const paddingTop = Number.parseFloat(style.paddingTop || "0") || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom || "0") || 0;
+    let total = borderTop + borderBottom + paddingTop + paddingBottom;
+    children.forEach((child) => {
+      total += child.getBoundingClientRect().height;
+    });
+    if (children.length > 1) {
+      total += rowGap * (children.length - 1);
+    }
+    return Math.max(360, Math.ceil(total + 2));
+  }
+
   function syncMainCompact() {
     if (state.view !== "main") return;
     const desired = desiredMainCompact();
-    const compactKey = String(desired);
+    const requestedHeight = desired ? measureMainCompactHeight() : null;
+    const compactKey = desired ? `true:${String(requestedHeight || "")}` : "false";
     if (mainWindowCompact === compactKey) return;
     mainWindowCompact = compactKey;
+    if (desired && requestedHeight) {
+      void apiCall("set_main_compact", true, requestedHeight);
+      return;
+    }
     void apiCall("set_main_compact", desired);
   }
 
@@ -617,28 +647,36 @@
 
   function renderBubble() {
     const bubble = state.bubble || { source_text: "", result_text: "", pending: false, pinned: false, action: "划词翻译" };
+    const mode = state.config?.translation_mode || state.ui?.translation_mode || bubble.mode || "argos";
     const bubbleResultClass = bubble.pending ? ((bubble.result_text || "") ? "pending-streaming" : "pending-waiting") : "";
     const bubbleResultContent = bubble.pending && !bubble.result_text ? skeletonMarkup("bubble") : escapeHtml(bubble.result_text || "暂无结果");
     root.innerHTML = `
       <div class="bubble-shell">
         <section class="bubble-card">
           <header class="bubble-header" data-drag-handle="bubble-header">
-            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.pin}</button>
-            <div class="bubble-header-spacer"></div>
+            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.book}</button>
+            <div class="bubble-title">
+              <span class="bubble-title-text">selected text</span>
+            </div>
+            <div class="bubble-mode-switch">
+              <button class="mode-chip ${mode === "argos" ? "active" : ""}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译">${icons.book}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译">${icons.robot}</button>
+            </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
           </header>
           <div class="bubble-content bubble-content-single">
             <div class="bubble-stack bubble-stack-result bubble-stack-only">
-              <div class="bubble-label bubble-result-label">${bubble.pending ? "正在翻译" : "译文"}</div>
-              <div class="bubble-result ${bubbleResultClass}" data-autoscroll="bubble-result">${bubbleResultContent}</div>
+              <div class="bubble-label bubble-result-label"></div>
+              <div class="bubble-result ${bubbleResultClass}">
+                <div class="bubble-result-scroll" data-autoscroll="bubble-result">${bubbleResultContent}</div>
+              </div>
             </div>
           </div>
           <div class="bubble-actions">
-            <button class="ghost-button" data-action="copy-result">${icons.copy}<span>复制</span></button>
-            <button class="ghost-button" data-action="open-zoom-bubble">${icons.expand}<span>放大查看</span></button>
+            <button class="icon-button bubble-action-icon" data-action="copy-result" aria-label="复制">${icons.copy}</button>
+            <button class="icon-button bubble-action-icon" data-action="open-zoom-bubble" aria-label="放大查看">${icons.expand}</button>
           </div>
         </section>
-        <div class="bubble-arrow"></div>
       </div>`;
   }
 
@@ -678,15 +716,22 @@
     const label = document.querySelector(".bubble-result-label");
     const result = document.querySelector(".bubble-result");
     const pin = document.querySelector(".bubble-pin");
+    const modeArgos = document.querySelector('.bubble-mode-switch [data-mode="argos"]');
+    const modeAi = document.querySelector('.bubble-mode-switch [data-mode="ai"]');
     if (!label || !result || !pin || !state.bubble) return false;
 
-    label.textContent = state.bubble.pending ? "正在翻译" : "译文";
-    result.innerHTML = state.bubble.pending && !state.bubble.result_text
+    label.textContent = "";
+    const resultScroll = result.querySelector(".bubble-result-scroll");
+    if (!resultScroll) return false;
+    resultScroll.innerHTML = state.bubble.pending && !state.bubble.result_text
       ? skeletonMarkup("bubble")
       : escapeHtml(state.bubble.result_text || "暂无结果");
     result.classList.toggle("pending-streaming", Boolean(state.bubble.pending && state.bubble.result_text));
     result.classList.toggle("pending-waiting", Boolean(state.bubble.pending && !state.bubble.result_text));
     pin.classList.toggle("active", Boolean(state.bubble.pinned));
+    const activeMode = state.config?.translation_mode || state.ui?.translation_mode || state.bubble.mode || "argos";
+    if (modeArgos) modeArgos.classList.toggle("active", activeMode === "argos");
+    if (modeAi) modeAi.classList.toggle("active", activeMode === "ai");
     applyAutoScroll("bubble-result");
     return true;
   }
@@ -745,6 +790,39 @@
       case "set-mode":
         await apiCall("set_mode", actionTarget.dataset.mode);
         break;
+      case "set-mode-bubble": {
+        const nextMode = String(actionTarget.dataset.mode || "").trim();
+        if (!nextMode || (nextMode !== "argos" && nextMode !== "ai")) {
+          break;
+        }
+        const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
+        if (currentMode === nextMode) {
+          break;
+        }
+        if (state.bubble) {
+          state.bubble.mode = nextMode;
+          state.bubble.pending = true;
+          state.bubble.result_text = "";
+        }
+        if (state.config) {
+          state.config.translation_mode = nextMode;
+        }
+        state.ui.translation_mode = nextMode;
+        if (!patchBubbleDynamic()) rerender();
+        await apiCall("set_mode", nextMode);
+        const sourceText = String(state.bubble?.source_text || "").trim();
+        if (sourceText) {
+          scrollFollowState["bubble-result"] = true;
+          await apiCall("translate", sourceText, state.bubble?.action || "划词翻译");
+        } else {
+          if (state.bubble) {
+            state.bubble.pending = false;
+          }
+          showToast("warning", "当前无可翻译文本");
+          if (!patchBubbleDynamic()) rerender();
+        }
+        break;
+      }
       case "set-theme-draft":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
         state.settingsDraft.theme_mode = actionTarget.dataset.theme || "system";
@@ -766,10 +844,12 @@
         await apiCall("copy_text", state.view === "bubble" ? state.bubble?.result_text || "" : state.resultText);
         break;
       case "clear-all":
+        state.mainReqId = 0;
         state.sourceText = "";
         state.resultText = "";
         state.pending = false;
         rerender();
+        void apiCall("cancel_translation");
         break;
       case "close-app":
         await apiCall("close_window");
@@ -864,6 +944,7 @@
         setTheme(payload.themeMode || payload.settings?.effectiveTheme || "light");
         break;
       case "translation-start":
+        state.mainReqId = Number(payload.reqId || 0);
         state.sourceText = payload.sourceText || state.sourceText;
         state.resultText = "";
         state.pending = true;
@@ -877,6 +958,9 @@
         if (patchMainDynamic()) return;
         break;
       case "translation-chunk":
+        if (!state.mainReqId || Number(payload.reqId || 0) !== state.mainReqId) {
+          break;
+        }
         state.sourceText = payload.sourceText || state.sourceText;
         state.resultText = payload.resultText || state.resultText;
         state.pending = true;
@@ -887,9 +971,13 @@
         if (patchMainDynamic()) return;
         break;
       case "translation-done":
+        if (!state.mainReqId || Number(payload.reqId || 0) !== state.mainReqId) {
+          break;
+        }
         state.sourceText = payload.sourceText || state.sourceText;
         state.resultText = payload.resultText || "";
         state.pending = false;
+        state.mainReqId = 0;
         state.ui.history = payload.history || state.ui.history;
         if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.sourceText = state.sourceText;
@@ -900,7 +988,11 @@
         }
         break;
       case "translation-error":
+        if (!state.mainReqId || Number(payload.reqId || 0) !== state.mainReqId) {
+          break;
+        }
         state.pending = false;
+        state.mainReqId = 0;
         state.resultText = payload.resultText ? `${payload.resultText}\n\n${payload.message}` : payload.message || "";
         if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.resultText = state.resultText;
@@ -908,7 +1000,11 @@
         state.notice = { type: "error", text: payload.message || "翻译失败" };
         break;
       case "translation-cancelled":
+        if (!state.mainReqId || Number(payload.reqId || 0) !== state.mainReqId) {
+          break;
+        }
         state.pending = false;
+        state.mainReqId = 0;
         if (typeof payload.resultText === "string") {
           state.resultText = payload.resultText;
         }
@@ -1001,7 +1097,10 @@
       case "theme-updated":
         if (payload.bubble) state.bubble = payload.bubble;
         if (payload.themeMode) setTheme(payload.themeMode);
-        if (payload.mode && state.config) state.config.translation_mode = payload.mode;
+        if (payload.mode) {
+          if (state.config) state.config.translation_mode = payload.mode;
+          state.ui.translation_mode = payload.mode;
+        }
         if (state.view === "bubble" && patchBubbleDynamic()) return;
         break;
       case "screenshot-ocr-ready":
