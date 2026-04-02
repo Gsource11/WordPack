@@ -29,7 +29,7 @@ class InteractionConfig:
 
 @dataclass
 class AppConfig:
-    translation_mode: str = "offline"
+    translation_mode: str = "argos"
     theme_mode: str = "system"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     offline: OfflineConfig = field(default_factory=OfflineConfig)
@@ -58,7 +58,7 @@ class ConfigStore:
         legacy_selection_enabled = interaction_raw.get("selection_mouse_enabled", True)
 
         cfg = AppConfig(
-            translation_mode=raw.get("translation_mode", "offline"),
+            translation_mode=str(raw.get("translation_mode", "argos") or "argos").strip().lower(),
             theme_mode=str(raw.get("theme_mode", "system") or "system"),
             openai=OpenAIConfig(
                 base_url=openai_raw.get("base_url", "https://api.openai.com/v1"),
@@ -84,8 +84,10 @@ class ConfigStore:
             ),
         )
 
-        if cfg.translation_mode not in {"offline", "ai"}:
-            cfg.translation_mode = "offline"
+        if cfg.translation_mode == "offline":
+            cfg.translation_mode = "argos"
+        if cfg.translation_mode not in {"argos", "ai"}:
+            cfg.translation_mode = "argos"
         if cfg.theme_mode not in {"system", "light", "dark"}:
             cfg.theme_mode = "system"
 

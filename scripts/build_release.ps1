@@ -43,7 +43,6 @@ with Image.open(png_path) as image:
     --windowed `
     --name WordPack `
     --icon "icon/app-icon.ico" `
-    --add-data "data/offline_dict.json;data" `
     --add-data "icon;icon" `
     --add-data "src/uia_capture.ps1;src" `
     --collect-all rapidocr `

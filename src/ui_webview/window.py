@@ -41,8 +41,8 @@ class WordPackWebviewApp:
     MAIN_COMPACT_HEIGHT = 500
     BUBBLE_WIDTH = 408
     BUBBLE_HEIGHT = 272
-    ICON_WIDTH = 24
-    ICON_HEIGHT = 18
+    ICON_WIDTH = 34
+    ICON_HEIGHT = 34
 
     def __init__(self) -> None:
         self.base_dir = Path(__file__).resolve().parent.parent.parent
@@ -54,7 +54,7 @@ class WordPackWebviewApp:
         self.config: AppConfig = self.config_store.load()
 
         self.history = HistoryStore(self.data_dir / "history.db")
-        self.service = TranslationService(self.data_dir / "offline_dict.json", self.get_config)
+        self.service = TranslationService(self.get_config)
         self.ocr_service = ScreenshotOCRService()
         self.selection_capture = SelectionCaptureService()
         self.bridge = FrontendBridge(self.logger)
@@ -112,18 +112,19 @@ class WordPackWebviewApp:
         self._last_poll_input_error_log_at = 0.0
         self._main_window_geometry_before_zoom: tuple[int, int, int, int] | None = None
         self._hide_main_after_zoom_close = False
-        self._main_compact = False
+        self._main_compact = True
 
     def run(self) -> None:
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = False
-        main_x, main_y = self._centered_position(self.MAIN_WIDTH, self.MAIN_HEIGHT)
+        initial_main_height = self.MAIN_COMPACT_HEIGHT
+        main_x, main_y = self._centered_position(self.MAIN_WIDTH, initial_main_height)
 
         self.main_window = self._create_window(
             kind="main",
             title=APP_TITLE,
             width=self.MAIN_WIDTH,
-            height=self.MAIN_HEIGHT,
+            height=initial_main_height,
             min_size=(420, self.MAIN_MIN_HEIGHT),
             x=main_x,
             y=main_y,
@@ -320,10 +321,10 @@ class WordPackWebviewApp:
                 if client_width <= 0 or client_height <= 0:
                     return
 
-                region_width = min(client_width, 40)
-                region_height = min(client_height, 28)
-                left = max(0, (client_width - region_width) // 2)
-                top = max(0, (client_height - region_height) // 2)
+                region_width = client_width
+                region_height = client_height
+                left = 0
+                top = 0
                 radius = min(region_width, region_height)
 
                 region = ctypes.windll.gdi32.CreateRoundRectRgn(
@@ -348,11 +349,13 @@ class WordPackWebviewApp:
         self.logger.info("Starting background input services")
         try:
             if self.main_window is not None:
-                restore = getattr(self.main_window, "restore", None)
                 show = getattr(self.main_window, "show", None)
-                if callable(restore):
-                    restore()
-                if callable(show):
+                current = self._current_main_geometry()
+                if current is not None:
+                    x, y, width, _height = current
+                    self._apply_main_geometry(x, y, width, self.MAIN_COMPACT_HEIGHT)
+                    self._main_compact = True
+                elif callable(show):
                     show()
                 self.hidden = False
         except Exception:
@@ -510,13 +513,15 @@ class WordPackWebviewApp:
     def set_translation_mode(self, mode: str) -> dict[str, Any]:
         with self.lock:
             value = str(mode or "").strip().lower()
-            if value not in {"offline", "ai"}:
-                value = "offline"
+            if value == "offline":
+                value = "argos"
+            if value not in {"argos", "ai"}:
+                value = "argos"
             self.config.translation_mode = value
             self.ui_state.translation_mode = value
             self.config_store.save(self.config)
 
-        if value == "offline":
+        if value == "argos":
             self.set_status(self.service.offline_diagnostics())
         else:
             self.set_status("已切换到 AI 模式")
@@ -736,6 +741,20 @@ class WordPackWebviewApp:
                     "action": action,
                 },
             )
+        elif show_bubble:
+            self.bridge.send(
+                "main",
+                "bubble-translation-chunk",
+                {
+                    "reqId": req_id,
+                    "sourceText": source_text,
+                    "delta": delta,
+                    "resultText": current_text,
+                    "mode": mode,
+                    "action": action,
+                },
+            )
+
         if show_bubble and current_show_bubble:
             self._update_bubble(
                 source_text,
@@ -780,6 +799,18 @@ class WordPackWebviewApp:
                     "history": history_rows,
                 },
             )
+        elif show_bubble:
+            self.bridge.send(
+                "main",
+                "bubble-translation-done",
+                {
+                    "reqId": req_id,
+                    "sourceText": source_text,
+                    "resultText": result_text,
+                    "mode": mode,
+                    "action": action,
+                },
+            )
 
         if show_bubble and current_show_bubble:
             self._update_bubble(
@@ -812,6 +843,19 @@ class WordPackWebviewApp:
             self.bridge.send(
                 "main",
                 "translation-error",
+                {
+                    "reqId": req_id,
+                    "sourceText": source_text,
+                    "resultText": partial,
+                    "message": message,
+                    "mode": mode,
+                    "action": action,
+                },
+            )
+        elif show_bubble:
+            self.bridge.send(
+                "main",
+                "bubble-translation-error",
                 {
                     "reqId": req_id,
                     "sourceText": source_text,
@@ -906,7 +950,7 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to restart hotkey manager after settings update")
 
-        if self.config.translation_mode == "offline":
+        if self.config.translation_mode == "argos":
             self.set_status(self.service.offline_diagnostics())
         else:
             self.set_status("AI 配置已保存")
@@ -1299,6 +1343,7 @@ class WordPackWebviewApp:
                 "resultText": self._bubble_state.result_text,
                 "action": self._bubble_state.action,
                 "mode": self._bubble_state.mode,
+                "origin": "bubble",
             },
         )
         return {"ok": True}

@@ -22,7 +22,7 @@ class BubbleState:
     pinned: bool = False
     pending: bool = False
     action: str = "划词翻译"
-    mode: str = "offline"
+    mode: str = "argos"
     source_text: str = ""
     result_text: str = ""
     x: int | None = None

@@ -19,7 +19,7 @@ def icon_path(filename: str) -> Path:
 
 
 def icon_data_url() -> str:
-    for filename, mime in (("app-icon.png", "image/png"), ("app-icon.svg", "image/svg+xml")):
+    for filename, mime in (("app-icon.svg", "image/svg+xml"), ("app-icon.png", "image/png")):
         path = icon_path(filename)
         if not path.exists():
             continue

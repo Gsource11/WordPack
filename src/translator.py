@@ -3,60 +3,10 @@
 import json
 import re
 import sys
-from pathlib import Path
 from typing import Any, Callable
 from urllib import error, parse, request
 
 from .config import AppConfig
-
-
-class OfflineDictionaryTranslator:
-    def __init__(self, dict_path: Path) -> None:
-        with dict_path.open("r", encoding="utf-8-sig") as f:
-            payload = json.load(f)
-        self.en_to_zh: dict[str, str] = payload.get("en_to_zh", {})
-        self.zh_to_en: dict[str, str] = payload.get("zh_to_en", {})
-
-    @staticmethod
-    def _contains_chinese(text: str) -> bool:
-        return bool(re.search(r"[\u4e00-\u9fff]", text))
-
-    def translate(self, text: str) -> str:
-        normalized = text.strip()
-        if not normalized:
-            return ""
-
-        key = normalized.lower()
-        if key in self.en_to_zh:
-            return self.en_to_zh[key]
-        if normalized in self.zh_to_en:
-            return self.zh_to_en[normalized]
-
-        if self._contains_chinese(normalized):
-            chars = [token for token in re.split(r"([，。！？；：、\s])", normalized) if token]
-            translated = [self.zh_to_en.get(token, token) for token in chars]
-            result = "".join(translated).strip()
-            if result and result != normalized:
-                return result
-            return "[离线词典暂无该中文词条]"
-
-        words = re.findall(r"[a-zA-Z']+|[^a-zA-Z']+", key)
-        chunks: list[str] = []
-        translated_any = False
-        for word in words:
-            if re.fullmatch(r"[a-zA-Z']+", word):
-                translated = self.en_to_zh.get(word)
-                if translated:
-                    translated_any = True
-                    chunks.append(translated)
-                else:
-                    chunks.append(word)
-            else:
-                chunks.append(word)
-        result = "".join(chunks).strip()
-        if translated_any:
-            return result
-        return "[离线词典暂无结果，可切换 AI 模式]"
 
 
 class ArgosOfflineTranslator:
@@ -259,9 +209,8 @@ class ArgosOfflineTranslator:
 
 
 class OfflineTranslator:
-    def __init__(self, dict_path: Path, cfg_getter) -> None:
+    def __init__(self, cfg_getter) -> None:
         self.cfg_getter = cfg_getter
-        self.dictionary = OfflineDictionaryTranslator(dict_path)
         self.argos = ArgosOfflineTranslator()
 
     def _preferred_direction(self) -> str:
@@ -297,40 +246,39 @@ class OfflineTranslator:
     def diagnostics(self, probe: bool = False) -> str:
         preferred = self._preferred_direction()
         if not probe and not self.argos.import_attempted():
-            return "离线模式: 词典兜底已就绪，Argos 运行库按需加载。"
+            return "Argos 运行库将按需检测；首次翻译或打开设置页时再加载。"
 
         items = self.argos.list_directions()
 
         if not self.runtime_ready(probe=probe):
-            return "离线模式: Argos 运行库缺失，当前仅词典兜底（发布版会内置）。"
+            return "Argos 运行库缺失，请安装依赖或使用发布版。"
 
         if not items:
-            return "离线模式: 未检测到 Argos 离线模型，请导入 .argosmodel 文件。"
+            return "Argos 已就绪，但未检测到模型，请导入 .argosmodel 文件。"
 
         if preferred != "auto":
             if any(item["direction"] == preferred for item in items):
-                return f"离线模式: Argos 已启用，当前固定方向 {preferred}"
-            return f"离线模式: 已配置 {preferred}，但该方向模型不可用，当前将自动匹配。"
+                return f"Argos 已启用，当前固定方向 {preferred}"
+            return f"已配置 {preferred}，但该方向模型不可用，当前将自动匹配。"
 
-        return "离线模式: Argos 已启用（自动匹配方向）"
+        return "Argos 已启用（自动匹配方向）"
 
     def translate(self, text: str) -> str:
         normalized = text.strip()
         if not normalized:
             return ""
 
-        if self.runtime_ready(probe=True):
-            items = self.argos.list_directions()
-            if items:
-                try:
-                    return self.argos.translate(normalized, self._preferred_direction())
-                except Exception as exc:
-                    return f"[离线模型翻译失败: {exc}]"
+        if not self.runtime_ready(probe=True):
+            return "[Argos 运行库未就绪，请先安装依赖或使用发布版。]"
 
-        if len(normalized) >= 80:
-            return "[当前未检测到离线神经翻译模型，长文本离线翻译不可用。请导入 Argos 模型或切换 AI 模式]"
+        items = self.argos.list_directions()
+        if not items:
+            return "[未检测到 Argos 模型，请先导入 .argosmodel 文件。]"
 
-        return self.dictionary.translate(normalized)
+        try:
+            return self.argos.translate(normalized, self._preferred_direction())
+        except Exception as exc:
+            return f"[Argos 翻译失败: {exc}]"
 
 
 class PartialStreamError(RuntimeError):
@@ -898,8 +846,8 @@ class OpenAICompatibleTranslator:
 
 
 class TranslationService:
-    def __init__(self, dict_path: Path, cfg_getter) -> None:
-        self.offline = OfflineTranslator(dict_path, cfg_getter)
+    def __init__(self, cfg_getter) -> None:
+        self.offline = OfflineTranslator(cfg_getter)
         self.ai = OpenAICompatibleTranslator(cfg_getter)
 
     def translate(self, text: str, mode: str) -> str:

@@ -34,7 +34,7 @@ class TranslatorApp:
         self.config: AppConfig = self.config_store.load()
 
         self.history = HistoryStore(self.data_dir / "history.db")
-        self.service = TranslationService(self.data_dir / "offline_dict.json", self.get_config)
+        self.service = TranslationService(self.get_config)
         self.ocr_service = ScreenshotOCRService()
         self.selection_capture = SelectionCaptureService()
         self.logger = get_logger(__name__)

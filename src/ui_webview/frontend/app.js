@@ -13,7 +13,7 @@
     themeMode: "light",
     ui: {
       status: "",
-      translation_mode: "offline",
+      translation_mode: "argos",
       theme_mode: "light",
       direction: "方向: 自动",
       history: [],
@@ -128,26 +128,13 @@
     );
   }
 
-  function measureMainCompactHeight() {
-    const card = document.querySelector(".window-card");
-    if (!card) return null;
-    const styles = window.getComputedStyle(card);
-    const paddingY = parseFloat(styles.paddingTop || "0") + parseFloat(styles.paddingBottom || "0");
-    const gap = parseFloat(styles.gap || "0");
-    const children = Array.from(card.children).filter((element) => window.getComputedStyle(element).display !== "none");
-    if (!children.length) return null;
-    const contentHeight = children.reduce((sum, element) => sum + element.getBoundingClientRect().height, 0);
-    return Math.ceil(paddingY + contentHeight + (Math.max(0, children.length - 1) * gap) + 2);
-  }
-
   function syncMainCompact() {
     if (state.view !== "main") return;
     const desired = desiredMainCompact();
-    const measuredHeight = desired ? measureMainCompactHeight() : null;
-    const compactKey = `${desired}:${measuredHeight ?? ""}`;
+    const compactKey = String(desired);
     if (mainWindowCompact === compactKey) return;
     mainWindowCompact = compactKey;
-    void apiCall("set_main_compact", desired, measuredHeight);
+    void apiCall("set_main_compact", desired);
   }
 
   function updateResultCardVisibility() {
@@ -273,9 +260,15 @@
   }
 
   function renderIcon() {
+    const iconUrl = state.branding?.bubbleIconUrl || state.branding?.appIconUrl || "";
+    const iconInner = iconUrl
+      ? `<img class="selection-icon-image" src="${iconUrl}" alt="${escapeHtml(state.appTitle || "WordPack")}" />`
+      : icons.book;
     root.innerHTML = `
       <div class="icon-shell">
-        <button class="selection-icon active" data-action="trigger-selection" aria-label="划词翻译">${brandIcon("selection-icon-brand", state.branding?.bubbleIconUrl || state.branding?.appIconUrl, icons.book)}</button>
+        <button class="selection-icon active" data-action="trigger-selection" aria-label="划词翻译">
+          <span class="selection-icon-inner">${iconInner}</span>
+        </button>
       </div>`;
     if (state.triggerMode === "hover") {
       const button = document.querySelector(".selection-icon");
@@ -419,7 +412,7 @@
   }
 
   function renderMain() {
-    const mode = state.config?.translation_mode || "offline";
+    const mode = state.config?.translation_mode || "argos";
     const result = state.resultText || "";
     const showResultCard = Boolean(state.pending || result);
     const mainResultClass = state.pending ? (result ? "pending-streaming" : "pending-waiting") : "";
@@ -463,7 +456,7 @@
           </header>
           <div class="segmented">
             <div class="seg-track">
-              <button class="seg-btn ${mode === "offline" ? "active" : ""}" data-action="set-mode" data-mode="offline">${icons.book}<span>离线词典</span></button>
+              <button class="seg-btn ${mode === "argos" ? "active" : ""}" data-action="set-mode" data-mode="argos">${icons.book}<span>词典翻译</span></button>
               <button class="seg-btn ${mode === "ai" ? "active" : ""}" data-action="set-mode" data-mode="ai">${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
@@ -547,14 +540,14 @@
               </div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">离线模型</div>
+              <div class="setting-title">Argos 模型</div>
               <div class="field">
                 <label>默认方向</label>
                 ${choiceGroupMarkup("offline.preferred_direction", draft.offline?.preferred_direction || "auto", directionOptions)}
               </div>
-              <div class="notice ${settings.offlineRuntimeReady ? "" : "warning"}">${escapeHtml(settings.offlineRuntimeReady ? settings.offlineDiagnostics || "离线运行库可用" : settings.offlineRuntimeHint || "离线运行库未就绪")}</div>
+              <div class="notice ${settings.offlineRuntimeReady ? "" : "warning"}">${escapeHtml(settings.offlineRuntimeReady ? settings.offlineDiagnostics || "Argos 运行库可用" : settings.offlineRuntimeHint || "Argos 运行库未就绪")}</div>
               <div class="settings-actions">
-                <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入模型</span></button>
+                <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入 Argos 模型</span></button>
               </div>
             </section>
             <section class="setting-group">
@@ -740,7 +733,7 @@
       case "open-zoom":
         scrollFollowState["zoom-shell"] = true;
         await apiCall("open_zoom_panel");
-        state.zoomPayload = { sourceText: state.sourceText, resultText: state.resultText };
+        state.zoomPayload = { sourceText: state.sourceText, resultText: state.resultText, origin: "main" };
         state.zoomOpen = true;
         rerender();
         break;
@@ -877,7 +870,7 @@
         scrollFollowState["main-result"] = true;
         scrollFollowState["bubble-result"] = true;
         scrollFollowState["zoom-shell"] = true;
-        if (state.zoomPayload) {
+        if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.sourceText = state.sourceText;
           state.zoomPayload.resultText = "";
         }
@@ -887,7 +880,7 @@
         state.sourceText = payload.sourceText || state.sourceText;
         state.resultText = payload.resultText || state.resultText;
         state.pending = true;
-        if (state.zoomPayload) {
+        if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.sourceText = state.sourceText;
           state.zoomPayload.resultText = state.resultText;
         }
@@ -898,7 +891,7 @@
         state.resultText = payload.resultText || "";
         state.pending = false;
         state.ui.history = payload.history || state.ui.history;
-        if (state.zoomPayload) {
+        if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.sourceText = state.sourceText;
           state.zoomPayload.resultText = state.resultText;
         }
@@ -909,7 +902,7 @@
       case "translation-error":
         state.pending = false;
         state.resultText = payload.resultText ? `${payload.resultText}\n\n${payload.message}` : payload.message || "";
-        if (state.zoomPayload) {
+        if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.resultText = state.resultText;
         }
         state.notice = { type: "error", text: payload.message || "翻译失败" };
@@ -933,7 +926,7 @@
         if (payload.config) state.config = payload.config;
         if (payload.settings) state.settings = payload.settings;
         state.settingsDraft = clone(state.config || {});
-        state.notice = { type: "success", text: "离线模型已更新" };
+        state.notice = { type: "success", text: "Argos 模型已更新" };
         break;
       case "offline-model-import-error":
         state.notice = { type: "error", text: payload.message || "模型导入失败" };
@@ -941,14 +934,17 @@
       case "zoom-open":
         state.zoomPayload = payload;
         state.zoomOpen = true;
-        if (typeof state.resultText === "string" && state.pending) {
+        if (state.zoomPayload && !state.zoomPayload.origin) {
+          state.zoomPayload.origin = "main";
+        }
+        if (state.zoomPayload.origin !== "bubble" && typeof state.resultText === "string" && state.pending) {
           state.zoomPayload.resultText = state.resultText;
         }
         break;
       case "bubble-updated":
         state.bubble = payload.bubble || state.bubble;
         if (payload.themeMode) setTheme(payload.themeMode);
-        if (state.zoomOpen && state.zoomPayload && payload.bubble) {
+        if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble" && payload.bubble) {
           state.zoomPayload.sourceText = payload.bubble.source_text || state.zoomPayload.sourceText || "";
           state.zoomPayload.resultText = payload.bubble.result_text || "";
           state.zoomPayload.action = payload.bubble.action || state.zoomPayload.action;
@@ -963,6 +959,43 @@
           scrollFollowState["bubble-result"] = true;
         }
         if (patchBubbleDynamic()) return;
+        shouldRerender = false;
+        break;
+      case "bubble-translation-chunk":
+        if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble") {
+          state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
+          state.zoomPayload.resultText = payload.resultText || state.zoomPayload.resultText || "";
+          const zoomSource = document.getElementById("zoomSource");
+          const zoomResult = document.getElementById("zoomResult");
+          if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
+          if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
+          applyAutoScroll("zoom-shell");
+        }
+        shouldRerender = false;
+        break;
+      case "bubble-translation-done":
+        if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble") {
+          state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
+          state.zoomPayload.resultText = payload.resultText || state.zoomPayload.resultText || "";
+          const zoomSource = document.getElementById("zoomSource");
+          const zoomResult = document.getElementById("zoomResult");
+          if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
+          if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
+          applyAutoScroll("zoom-shell");
+        }
+        shouldRerender = false;
+        break;
+      case "bubble-translation-error":
+        if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble") {
+          const resultText = payload.resultText ? `${payload.resultText}\n\n${payload.message}` : (payload.message || "");
+          state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
+          state.zoomPayload.resultText = resultText;
+          const zoomSource = document.getElementById("zoomSource");
+          const zoomResult = document.getElementById("zoomResult");
+          if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
+          if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
+          applyAutoScroll("zoom-shell");
+        }
         shouldRerender = false;
         break;
       case "theme-updated":
