@@ -883,6 +883,30 @@ body.view-main .modal-panel {
   overscroll-behavior: contain;
 }
 
+.sheet-scroll-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--stroke-soft);
+  background: var(--panel-muted);
+  overflow: hidden;
+  box-sizing: border-box;
+  background-clip: padding-box;
+}
+
+.sheet-scroll-shell .history-list,
+.sheet-scroll-shell .settings-scroll {
+  height: 100%;
+  min-height: 0;
+  padding: 10px;
+  scrollbar-gutter: stable;
+}
+
+body.view-main .sheet-scroll-shell {
+  border-color: #c3cad4;
+  background: #d6d9de;
+}
+
 .history-card {
   padding: 12px;
   display: flex;
@@ -893,7 +917,25 @@ body.view-main .modal-panel {
 
 body.view-main .history-card {
   border-color: #c4cbd5;
-  background: #dde2e8;
+  background: #e0e4ea;
+}
+
+.history-list::-webkit-scrollbar,
+.settings-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.history-list::-webkit-scrollbar-track,
+.settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb,
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: rgba(80, 97, 120, 0.5);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .history-meta {

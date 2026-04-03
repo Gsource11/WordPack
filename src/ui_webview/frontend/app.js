@@ -529,7 +529,8 @@
             <div class="sheet-title">历史记录</div>
             <button class="icon-button" data-action="close-history">${icons.close}</button>
           </div>
-          <div class="history-list" id="historyList" data-preserve-scroll="history">
+          <div class="sheet-scroll-shell">
+            <div class="history-list" id="historyList" data-preserve-scroll="history">
             ${historyRows.length ? historyRows.map((item, index) => `
               <article class="history-card" data-action="load-history" data-index="${index}">
                 <div class="history-meta">
@@ -538,6 +539,7 @@
                 </div>
                 <div class="history-text">${escapeHtml((item.source_text || "").slice(0, 120))}</div>
               </article>`).join("") : `<div class="notice">暂无历史记录</div>`}
+            </div>
           </div>
           <div class="settings-actions">
             <button class="ghost-button" data-action="clear-history">${icons.trash}<span>清空历史</span></button>
@@ -551,7 +553,8 @@
             <div class="sheet-title">设置</div>
             <button class="icon-button" data-action="close-settings">${icons.close}</button>
           </div>
-          <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
+          <div class="sheet-scroll-shell">
+            <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
             ${notice}
             <section class="setting-group">
               <div class="setting-title">外观</div>
@@ -618,6 +621,7 @@
                 <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
               </div>
             </section>
+            </div>
           </div>
           <div class="settings-actions">
             <button class="ghost-button" data-action="save-settings">${icons.settings}<span>保存设置</span></button>
