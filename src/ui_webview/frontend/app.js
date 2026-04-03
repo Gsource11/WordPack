@@ -236,41 +236,12 @@
     );
   }
 
-  function measureMainCompactHeight() {
-    const card = document.querySelector(".window-card");
-    if (!card) return null;
-    const style = window.getComputedStyle(card);
-    const children = Array.from(card.children).filter((node) => {
-      const elementStyle = window.getComputedStyle(node);
-      return elementStyle.display !== "none";
-    });
-    if (!children.length) return null;
-    const rowGap = Number.parseFloat(style.rowGap || style.gap || "0") || 0;
-    const borderTop = Number.parseFloat(style.borderTopWidth || "0") || 0;
-    const borderBottom = Number.parseFloat(style.borderBottomWidth || "0") || 0;
-    const paddingTop = Number.parseFloat(style.paddingTop || "0") || 0;
-    const paddingBottom = Number.parseFloat(style.paddingBottom || "0") || 0;
-    let total = borderTop + borderBottom + paddingTop + paddingBottom;
-    children.forEach((child) => {
-      total += child.getBoundingClientRect().height;
-    });
-    if (children.length > 1) {
-      total += rowGap * (children.length - 1);
-    }
-    return Math.max(360, Math.ceil(total + 2));
-  }
-
   function syncMainCompact() {
     if (state.view !== "main") return;
     const desired = desiredMainCompact();
-    const requestedHeight = desired ? measureMainCompactHeight() : null;
-    const compactKey = desired ? `true:${String(requestedHeight || "")}` : "false";
+    const compactKey = desired ? "true" : "false";
     if (mainWindowCompact === compactKey) return;
     mainWindowCompact = compactKey;
-    if (desired && requestedHeight) {
-      void apiCall("set_main_compact", true, requestedHeight);
-      return;
-    }
     void apiCall("set_main_compact", desired);
   }
 
@@ -723,28 +694,48 @@
                 <button class="icon-button history-search-trigger" data-action="history-search-now" aria-label="立即搜索">${icons.search}</button>
               </div>
               <div class="history-filter-row">
-                <select data-history-field="mode">
-                  <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>全部模式</option>
-                  <option value="argos" ${historyPanel.mode === "argos" ? "selected" : ""}>词典</option>
-                  <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
-                </select>
-                <select data-history-field="source_kind">
-                  <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>全部来源</option>
-                  <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手输</option>
-                  <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>划词</option>
-                  <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>截图</option>
-                </select>
+                <label class="history-filter-item">
+                  <span class="history-filter-label">模式</span>
+                  <span class="history-select-wrap">
+                    <select class="history-filter-select" data-history-field="mode">
+                      <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>全部</option>
+                      <option value="argos" ${historyPanel.mode === "argos" ? "selected" : ""}>词典</option>
+                      <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
+                    </select>
+                  </span>
+                </label>
+                <label class="history-filter-item">
+                  <span class="history-filter-label">来源</span>
+                  <span class="history-select-wrap">
+                    <select class="history-filter-select" data-history-field="source_kind">
+                      <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>全部</option>
+                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手输</option>
+                      <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>划词</option>
+                      <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>截图</option>
+                    </select>
+                  </span>
+                </label>
               </div>
               <div class="history-filter-row">
-                <select data-history-field="direction">
-                  ${historyDirectionOptions.map((opt) => `<option value="${escapeHtml(opt.value)}" ${historyPanel.direction === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
-                </select>
-                <select data-history-field="range_days">
-                  <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>全部时间</option>
-                  <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7天内</option>
-                  <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30天内</option>
-                  <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90天内</option>
-                </select>
+                <label class="history-filter-item">
+                  <span class="history-filter-label">方向</span>
+                  <span class="history-select-wrap">
+                    <select class="history-filter-select" data-history-field="direction">
+                      ${historyDirectionOptions.map((opt) => `<option value="${escapeHtml(opt.value)}" ${historyPanel.direction === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+                    </select>
+                  </span>
+                </label>
+                <label class="history-filter-item">
+                  <span class="history-filter-label">时间</span>
+                  <span class="history-select-wrap">
+                    <select class="history-filter-select" data-history-field="range_days">
+                      <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>全部</option>
+                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7天内</option>
+                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30天内</option>
+                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90天内</option>
+                    </select>
+                  </span>
+                </label>
               </div>
             </div>
           </div>

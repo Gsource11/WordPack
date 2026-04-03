@@ -42,6 +42,7 @@ class WordPackWebviewApp:
     MAIN_HEIGHT = 760
     MAIN_MIN_HEIGHT = 360
     MAIN_COMPACT_HEIGHT = 430
+    MAIN_STARTUP_Y_SHIFT = 24
     BUBBLE_WIDTH = 408
     BUBBLE_HEIGHT = 272
     ICON_WIDTH = 34
@@ -144,6 +145,8 @@ class WordPackWebviewApp:
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = False
         initial_main_height = self.MAIN_COMPACT_HEIGHT
         main_x, main_y = self._centered_position(self.MAIN_WIDTH, initial_main_height)
+        bounds = get_virtual_screen_bounds()
+        main_y = max(bounds.top + 8, int(main_y) - self.MAIN_STARTUP_Y_SHIFT)
 
         self.main_window = self._create_window(
             kind="main",

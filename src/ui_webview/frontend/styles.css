@@ -994,6 +994,59 @@ body.view-main .modal-panel {
   gap: 6px;
 }
 
+.history-filter-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.history-filter-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.history-select-wrap {
+  position: relative;
+  display: block;
+}
+
+.history-select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid rgba(79, 96, 121, 0.9);
+  border-bottom: 2px solid rgba(79, 96, 121, 0.9);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+
+.history-filter-select {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 30px 7px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke-soft);
+  background: var(--panel-muted);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+body.view-main .history-filter-select {
+  border-color: #bfc8d4;
+  background: #dde2e8;
+}
+
 .history-search {
   width: 100%;
   min-height: 34px;
