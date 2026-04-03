@@ -183,7 +183,8 @@ class WordPackWebviewApp:
 
     def _frontend_url(self, view_name: str) -> str:
         base = (self.base_dir / "src" / "ui_webview" / "frontend" / "index.html").resolve().as_posix()
-        return f"{base}?view={view_name}"
+        rev = int(time.time())
+        return f"{base}?view={view_name}&rev={rev}"
 
     def _centered_position(self, width: int, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()

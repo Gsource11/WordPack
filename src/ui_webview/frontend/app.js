@@ -49,7 +49,7 @@
       .replaceAll('"', "&quot;");
 
   const icon = (paths) =>
-    `<span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
+    `<span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
 
   const icons = {
     history: icon("<path d='M3 12a9 9 0 1 0 3-6.7'/><path d='M3 4v5h5'/><path d='M12 7v5l3 2'/>"),
@@ -173,6 +173,10 @@
     const shouldShow = Boolean(state.pending || state.resultText);
     resultCard.classList.toggle("hidden", !shouldShow);
     resultCard.style.display = shouldShow ? "" : "none";
+    const windowCard = document.querySelector(".window-card");
+    if (windowCard) {
+      windowCard.classList.toggle("no-result", !shouldShow);
+    }
     return shouldShow;
   }
 
@@ -475,7 +479,7 @@
 
     root.innerHTML = `
       <div class="window-shell">
-        <section class="window-card">
+        <section class="window-card ${showResultCard ? "" : "no-result"}">
           <header class="topbar" data-drag-handle="main-topbar">
             <div class="drag-row"><span class="app-badge">${brandIcon("app-badge-icon", state.branding?.appIconUrl)}<span>${escapeHtml(state.appTitle || "WordPack")}</span></span></div>
             <div class="toolbar">
@@ -490,12 +494,14 @@
               <button class="seg-btn ${mode === "ai" ? "active" : ""}" data-action="set-mode" data-mode="ai">${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
-          <section class="card">
+          <section class="card input-card">
             <div class="card-head">
               <div class="card-title">输入内容</div>
               <button class="dir-button" data-action="cycle-direction">${escapeHtml(state.ui.direction || "方向: 自动")}</button>
             </div>
-            <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="输入或粘贴待翻译文本"></textarea>
+            <div class="input-shell">
+              <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="输入或粘贴待翻译文本"></textarea>
+            </div>
           </section>
           <button class="primary-button" data-action="translate">${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
           <section class="card result-card ${showResultCard ? "" : "hidden"}">
@@ -506,7 +512,9 @@
                 <button class="mini-button" data-action="open-zoom">${icons.expand}</button>
               </div>
             </div>
-            <div class="result-pane ${mainResultClass}" id="resultPane" data-preserve-scroll="result" data-autoscroll="main-result">${mainResultContent}</div>
+            <div class="result-pane ${mainResultClass}" id="resultPane" data-preserve-scroll="result">
+              <div class="result-scroll" id="resultScroll" data-autoscroll="main-result">${mainResultContent}</div>
+            </div>
           </section>
           <div class="footer-actions">
             <button class="ghost-button" data-action="copy-result">${icons.copy}<span>复制</span></button>
@@ -684,8 +692,9 @@
     if (state.view !== "main") return false;
     const textarea = document.getElementById("sourceText");
     const resultPane = document.getElementById("resultPane");
+    const resultScroll = document.getElementById("resultScroll");
     const statusText = document.getElementById("statusText");
-    if (!textarea || !resultPane) return false;
+    if (!textarea || !resultPane || !resultScroll) return false;
 
     if (document.activeElement !== textarea && textarea.value !== state.sourceText) {
       textarea.value = state.sourceText;
@@ -693,7 +702,7 @@
 
     updateResultCardVisibility();
     syncMainCompact();
-    resultPane.innerHTML = state.pending && !state.resultText
+    resultScroll.innerHTML = state.pending && !state.resultText
       ? skeletonMarkup("main")
       : escapeHtml(state.resultText || "");
     resultPane.classList.toggle("pending-streaming", Boolean(state.pending && state.resultText));

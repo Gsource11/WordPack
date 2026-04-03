@@ -20,17 +20,34 @@
       (function () {
         var params = new URLSearchParams(window.location.search);
         var view = params.get("view") || "main";
+        var rev = params.get("rev") || String(Date.now());
         document.documentElement.dataset.view = view;
         if (view === "icon" || view === "bubble" || view === "overlay") {
           document.documentElement.classList.add("preload-transparent");
         }
         window.__WORDPACK_PRELOAD_VIEW__ = view;
+        window.__WORDPACK_ASSET_REV__ = rev;
       })();
     </script>
-    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      (function () {
+        var rev = window.__WORDPACK_ASSET_REV__ || String(Date.now());
+        var css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "./styles.css?v=" + encodeURIComponent(rev);
+        document.head.appendChild(css);
+      })();
+    </script>
   </head>
   <body data-theme="light">
     <div id="app"></div>
-    <script src="./app.js"></script>
+    <script>
+      (function () {
+        var rev = window.__WORDPACK_ASSET_REV__ || String(Date.now());
+        var js = document.createElement("script");
+        js.src = "./app.js?v=" + encodeURIComponent(rev);
+        document.body.appendChild(js);
+      })();
+    </script>
   </body>
 </html>
