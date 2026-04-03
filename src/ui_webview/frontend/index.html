@@ -9,27 +9,28 @@
       html, body {
         margin: 0;
         min-height: 100%;
-        background: #f2f3f0;
+        background: #c4c6ca;
+      }
+      html.preload-transparent,
+      html.preload-transparent body {
+        background: transparent !important;
       }
     </style>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var view = params.get("view") || "main";
+        document.documentElement.dataset.view = view;
+        if (view === "icon" || view === "bubble" || view === "overlay") {
+          document.documentElement.classList.add("preload-transparent");
+        }
+        window.__WORDPACK_PRELOAD_VIEW__ = view;
+      })();
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body data-theme="light" class="view-main">
-    <div id="app">
-      <div class="window-shell">
-        <section class="window-card">
-          <header class="topbar">
-            <div class="drag-row"><span class="app-badge">词小包 WordPack</span></div>
-          </header>
-          <section class="card result-card">
-            <div class="card-head">
-              <div class="card-title">正在启动</div>
-            </div>
-            <div class="result-pane pending"></div>
-          </section>
-        </section>
-      </div>
-    </div>
+  <body data-theme="light">
+    <div id="app"></div>
     <script src="./app.js"></script>
   </body>
 </html>

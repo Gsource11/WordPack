@@ -11,7 +11,7 @@ from typing import Any
 import webview
 
 from src.app_logging import LOG_DIR, get_logger
-from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url
+from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
@@ -19,6 +19,7 @@ from src.ocr import ScreenshotOCRService
 from src.selection_capture import ClipboardCaptureResult, SelectionCaptureService
 from src.storage import HistoryStore
 from src.translator import TranslationService
+from src.native_icon_overlay import NativeIconOverlay
 from src.ui_webview.api import WindowApi
 from src.ui_webview.backend import (
     capture_virtual_screen,
@@ -62,7 +63,7 @@ class WordPackWebviewApp:
         self.bridge = FrontendBridge(self.logger)
         self._app_icon_url = icon_data_url()
         self._app_icon_ico = ensure_icon_ico()
-        self.webview_storage_dir = LOG_DIR / "webview"
+        self.webview_storage_dir = self._resolve_webview_storage_dir()
 
         self.ui_state = UiState(
             status=self._initial_status(),
@@ -80,6 +81,13 @@ class WordPackWebviewApp:
         self.icon_window = None
         self.overlay_window = None
         self.window_apis: dict[str, WindowApi] = {}
+        self._native_icon_overlay = NativeIconOverlay(
+            icon_path=icon_path("app-icon.png"),
+            logger=self.logger,
+            on_click=lambda: self.trigger_selection_translate(),
+            window_size=self.ICON_WIDTH,
+            icon_size=18,
+        )
 
         self.hidden = False
         self._shutting_down = False
@@ -95,6 +103,7 @@ class WordPackWebviewApp:
         self._selection_icon_anchor_pos: tuple[int, int] | None = None
         self._selection_icon_retry = 0
         self._bubble_hide_timer: threading.Timer | None = None
+        self._selection_icon_hover_armed = False
         self._screenshot_session: ScreenshotSession | None = None
         self._last_window_interaction_at = 0.0
         self._input_poll_stop = threading.Event()
@@ -115,6 +124,19 @@ class WordPackWebviewApp:
         self._main_window_geometry_before_zoom: tuple[int, int, int, int] | None = None
         self._hide_main_after_zoom_close = False
         self._main_compact = True
+
+    def _resolve_webview_storage_dir(self) -> Path:
+        candidates = [LOG_DIR / "webview", self.data_dir / "webview"]
+        for candidate in candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                probe = candidate / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return candidate
+            except Exception:
+                continue
+        return self.data_dir
 
     def run(self) -> None:
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
@@ -237,9 +259,15 @@ class WordPackWebviewApp:
             "focus": focus,
             "easy_drag": False,
             "text_select": True,
+            # IMPORTANT:
+            # icon/overlay windows must keep native background fully transparent,
+            # otherwise a gray/black rectangular plate appears behind the floating icon.
             "background_color": (
                 self.MAIN_WINDOW_BG if kind == "main"
-                else (self.BUBBLE_WINDOW_BG if kind == "bubble" else "#eef1ec")
+                else (
+                    self.BUBBLE_WINDOW_BG if kind == "bubble"
+                    else ("#000000" if kind in {"icon", "overlay"} else "#eef1ec")
+                )
             ),
             "transparent": transparent,
         }
@@ -326,20 +354,16 @@ class WordPackWebviewApp:
                 if client_width <= 0 or client_height <= 0:
                     return
 
-                region_width = client_width
-                region_height = client_height
-                left = 0
-                top = 0
-                radius = min(region_width, region_height)
+                # Clip to an icon-centered circle to remove any rectangular background plate.
+                diameter = max(18, min(26, int(min(client_width, client_height))))
+                cx = client_width // 2
+                cy = client_height // 2
+                left = int(cx - (diameter // 2))
+                top = int(cy - (diameter // 2))
+                right = int(left + diameter)
+                bottom = int(top + diameter)
 
-                region = ctypes.windll.gdi32.CreateRoundRectRgn(
-                    left,
-                    top,
-                    left + region_width + 1,
-                    top + region_height + 1,
-                    radius,
-                    radius,
-                )
+                region = ctypes.windll.gdi32.CreateEllipticRgn(left, top, right + 1, bottom + 1)
                 if not region:
                     return
 
@@ -384,6 +408,7 @@ class WordPackWebviewApp:
                 self._bubble_state.visible = False
             elif kind == "icon":
                 self.icon_window = None
+                self._native_icon_overlay.hide()
             elif kind == "overlay":
                 self.overlay_window = None
 
@@ -409,6 +434,7 @@ class WordPackWebviewApp:
         self._cancel_selection_icon_timer()
         self._cancel_selection_icon_hide_timer()
         self._cancel_bubble_hide_timer()
+        self._native_icon_overlay.destroy()
         self._input_poll_stop.set()
         self.mouse_hooks.stop()
         self.hotkeys.stop()
@@ -470,7 +496,7 @@ class WordPackWebviewApp:
     def note_window_interaction(self, kind: str) -> None:
         del kind
         self._last_window_interaction_at = time.time()
-        if self.icon_window is not None:
+        if self._native_icon_overlay.is_visible():
             self.close_window("icon")
 
     def set_main_compact(self, compact: bool, height: int | None = None) -> dict[str, Any]:
@@ -1394,6 +1420,7 @@ class WordPackWebviewApp:
             self._bubble_hide_timer = None
 
     def trigger_selection_translate(self) -> dict[str, Any]:
+        self._selection_icon_hover_armed = False
         self.close_window("icon")
         return self._translate_pending_selection()
 
@@ -1660,23 +1687,9 @@ class WordPackWebviewApp:
         x = max(bounds.left + 4, min(x, bounds.right - self.ICON_WIDTH - 4))
         y = max(bounds.top + 4, min(y, bounds.bottom - self.ICON_HEIGHT - 4))
         self.close_window("icon")
-        self.icon_window = self._create_window(
-            kind="icon",
-            title="WordPack Icon",
-            width=self.ICON_WIDTH,
-            height=self.ICON_HEIGHT,
-            min_size=(self.ICON_WIDTH, self.ICON_HEIGHT),
-            x=x,
-            y=y,
-            frameless=True,
-            shadow=False,
-            resizable=False,
-            on_top=True,
-            focus=False,
-            transparent=True,
-        )
+        self._native_icon_overlay.show(int(x), int(y))
         self._selection_icon_anchor_pos = (int(x + (self.ICON_WIDTH / 2)), int(y + (self.ICON_HEIGHT / 2)))
-        self._apply_icon_window_shape_fix(self.icon_window)
+        self._selection_icon_hover_armed = True
         self._schedule_selection_icon_auto_hide()
 
     def close_window(self, kind: str) -> dict[str, Any]:
@@ -1694,9 +1707,11 @@ class WordPackWebviewApp:
                 self.bubble_window = None
         elif kind == "icon":
             self._cancel_selection_icon_hide_timer()
+            self._native_icon_overlay.hide()
             window = self.icon_window
             self.icon_window = None
             self._selection_icon_anchor_pos = None
+            self._selection_icon_hover_armed = False
         elif kind == "overlay":
             window = self.overlay_window
             self.overlay_window = None
@@ -1813,13 +1828,30 @@ class WordPackWebviewApp:
         return dx + dy
 
     def _maybe_hide_selection_icon_by_cursor(self, cursor_pos: tuple[int, int]) -> None:
-        if self.icon_window is None or self._selection_icon_anchor_pos is None:
+        if not self._native_icon_overlay.is_visible() or self._selection_icon_anchor_pos is None:
             return
 
         dx = abs(int(cursor_pos[0]) - int(self._selection_icon_anchor_pos[0]))
         dy = abs(int(cursor_pos[1]) - int(self._selection_icon_anchor_pos[1]))
         if dx + dy >= self._selection_icon_cancel_distance():
             self.close_window("icon")
+
+    def _maybe_trigger_selection_icon_hover(self, cursor_pos: tuple[int, int]) -> None:
+        if self.config.interaction.selection_icon_trigger != "hover":
+            return
+        if not self._selection_icon_hover_armed:
+            return
+        if not self._native_icon_overlay.is_visible() or self._selection_icon_anchor_pos is None:
+            return
+
+        dx = int(cursor_pos[0]) - int(self._selection_icon_anchor_pos[0])
+        dy = int(cursor_pos[1]) - int(self._selection_icon_anchor_pos[1])
+        trigger_radius = max(10, (self.ICON_WIDTH // 2) + 2)
+        if (dx * dx + dy * dy) > (trigger_radius * trigger_radius):
+            return
+
+        self._selection_icon_hover_armed = False
+        threading.Thread(target=self.trigger_selection_translate, daemon=True).start()
 
     def _maybe_hide_bubble_by_cursor(self, cursor_pos: tuple[int, int], cursor_step: int, cursor_dt: float) -> None:
         with self.lock:
@@ -1967,6 +1999,7 @@ class WordPackWebviewApp:
                     if (rbtn_down and not self._fb_last_rbtn_down) or (escape_down and not self._fb_last_escape_down):
                         self.cancel_screenshot_capture()
 
+                self._maybe_trigger_selection_icon_hover(current_cursor)
                 self._maybe_hide_selection_icon_by_cursor(current_cursor)
                 self._maybe_hide_bubble_by_cursor(current_cursor, cursor_step, cursor_dt)
 
