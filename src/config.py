@@ -28,12 +28,18 @@ class InteractionConfig:
 
 
 @dataclass
+class HistoryConfig:
+    retention_days: int = 30  # 7 | 30 | 90
+
+
+@dataclass
 class AppConfig:
     translation_mode: str = "argos"
     theme_mode: str = "system"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     offline: OfflineConfig = field(default_factory=OfflineConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
 
 
 class ConfigStore:
@@ -53,6 +59,7 @@ class ConfigStore:
         openai_raw = raw.get("openai", {})
         offline_raw = raw.get("offline", {})
         interaction_raw = raw.get("interaction", {})
+        history_raw = raw.get("history", {})
 
         # Backward compatibility with previous keys.
         legacy_selection_enabled = interaction_raw.get("selection_mouse_enabled", True)
@@ -82,6 +89,9 @@ class ConfigStore:
                 ).strip(),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
             ),
+            history=HistoryConfig(
+                retention_days=int(history_raw.get("retention_days", 30) or 30),
+            ),
         )
 
         if cfg.translation_mode not in {"argos", "ai"}:
@@ -98,6 +108,8 @@ class ConfigStore:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
         cfg.interaction.selection_icon_delay_ms = max(300, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
+        if cfg.history.retention_days not in {7, 30, 90}:
+            cfg.history.retention_days = 30
 
         return cfg
 

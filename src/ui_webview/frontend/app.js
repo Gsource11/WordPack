@@ -38,6 +38,27 @@
     triggerMode: "click",
     overlay: null,
     overlayReady: false,
+    historyPanel: {
+      tab: "recent",
+      q: "",
+      mode: "all",
+      direction: "all",
+      source_kind: "all",
+      range_days: 0,
+      offset: 0,
+      limit: 50,
+      total: 0,
+      has_more: false,
+      items: [],
+      loading: false,
+      filters: {
+        directions: ["all"],
+      },
+      scrollTop: 0,
+      viewportHeight: 420,
+      rowHeight: 124,
+      overscan: 4,
+    },
   };
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -53,6 +74,7 @@
 
   const icons = {
     history: icon("<path d='M3 12a9 9 0 1 0 3-6.7'/><path d='M3 4v5h5'/><path d='M12 7v5l3 2'/>"),
+    search: icon("<circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/>"),
     settings: icon("<circle cx='12' cy='12' r='3.2'/><path d='M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 1 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 1 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a2 2 0 1 1 4 0v.1a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6H20a2 2 0 1 1 0 4h-.1a1 1 0 0 0-.9.6Z'/>"),
     close: icon("<path d='M6 6l12 12M18 6l-12 12'/>"),
     book: icon("<path d='M4.5 6a1.5 1.5 0 0 1 1.5-1.5H8c1.8 0 3.2.45 4 1.35.8-.9 2.2-1.35 4-1.35h2a1.5 1.5 0 0 1 1.5 1.5v11.4a.6.6 0 0 1-.6.6H16c-1.6 0-2.85.3-3.75.92a.45.45 0 0 1-.5 0C10.85 18.3 9.6 18 8 18H5.1a.6.6 0 0 1-.6-.6Z'/><path d='M12 5.9V18.9'/><path d='M7.4 8.1h1.3M15.3 8.1h1.3'/>"),
@@ -61,6 +83,8 @@
     trash: icon("<path d='M4 7h16'/><path d='M10 11v6M14 11v6'/><path d='M6 7l1 12h10l1-12'/><path d='M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2'/>"),
     expand: icon("<path d='M15 4h5v5M9 20H4v-5M20 15v5h-5M4 9V4h5'/><path d='M14 10l6-6M10 14l-6 6'/>"),
     pin: icon("<path d='M12 17v3'/><path d='M8 4h8l-1 5 3 3H6l3-3Z'/>"),
+    favorite: icon("<path d='m12 17.3-5.2 3 1.4-5.8L3.8 10l5.9-.5L12 4l2.3 5.5 5.9.5-4.4 4.5 1.4 5.8Z'/>"),
+    favoriteActive: "<span class='icon'><svg viewBox='0 0 24 24' fill='currentColor' stroke='currentColor' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='m12 17.3-5.2 3 1.4-5.8L3.8 10l5.9-.5L12 4l2.3 5.5 5.9.5-4.4 4.5 1.4 5.8Z'/></svg></span>",
     camera: icon("<path d='M4 8h4l2-2h4l2 2h4v10H4Z'/><circle cx='12' cy='13' r='3.5'/>"),
     clipboard: icon("<rect x='8' y='4' width='8' height='4' rx='1.5'/><path d='M9 6H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2'/>"),
     moon: icon("<path d='M21 12.7A9 9 0 1 1 11.3 3a7 7 0 0 0 9.7 9.7Z'/>"),
@@ -107,6 +131,89 @@
           type="button"
         >${escapeHtml(option.label)}</button>`).join("")}
     </div>`;
+
+  const historySourceLabel = (value) => {
+    switch (String(value || "").toLowerCase()) {
+      case "selection":
+        return "划词";
+      case "screenshot":
+        return "截图";
+      case "manual":
+      default:
+        return "手输";
+    }
+  };
+
+  const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : "词典");
+
+  function historyQueryPayload(reset = false) {
+    const panel = state.historyPanel;
+    return {
+      tab: panel.tab,
+      q: panel.q,
+      mode: panel.mode,
+      direction: panel.direction,
+      source_kind: panel.source_kind,
+      range_days: panel.range_days,
+      limit: panel.limit,
+      offset: reset ? 0 : panel.offset,
+    };
+  }
+
+  async function loadHistory(reset = false) {
+    const panel = state.historyPanel;
+    if (panel.loading) return;
+    const activeElement = document.activeElement;
+    const shouldRefocusSearch = keepHistorySearchFocus
+      || (activeElement instanceof HTMLInputElement && activeElement.classList.contains("history-search"));
+    keepHistorySearchFocus = false;
+    panel.loading = true;
+    if (reset) {
+      panel.offset = 0;
+      panel.items = [];
+      panel.scrollTop = 0;
+    }
+    rerender();
+    try {
+      const payload = await apiCall("list_history", historyQueryPayload(reset));
+      if (!payload) return;
+      const incoming = Array.isArray(payload.items) ? payload.items : [];
+      panel.items = reset ? incoming : [...panel.items, ...incoming];
+      panel.total = Number(payload.total || panel.items.length);
+      panel.has_more = Boolean(payload.has_more);
+      panel.offset = panel.items.length;
+      if (payload.filters?.directions?.length) {
+        panel.filters.directions = payload.filters.directions;
+        if (!panel.filters.directions.includes(panel.direction)) {
+          panel.direction = "all";
+        }
+      }
+      rerender();
+      if (shouldRefocusSearch) {
+        window.requestAnimationFrame(() => {
+          const input = document.querySelector(".history-search");
+          if (input instanceof HTMLInputElement) {
+            input.focus();
+            const end = input.value.length;
+            input.setSelectionRange(end, end);
+          }
+        });
+      }
+    } finally {
+      panel.loading = false;
+      rerender();
+      if (shouldRefocusSearch) {
+        window.requestAnimationFrame(() => {
+          const input = document.querySelector(".history-search");
+          if (input instanceof HTMLInputElement) {
+            input.focus();
+            const end = input.value.length;
+            input.setSelectionRange(end, end);
+          }
+        });
+      }
+    }
+  }
 
   function isNearScrollEnd(element) {
     return (element.scrollTop + element.clientHeight) >= (element.scrollHeight - scrollTailTolerance);
@@ -209,6 +316,72 @@
 
   let toastTimer = 0;
   let mainWindowCompact = "";
+  let historyFilterTimer = 0;
+  let settingsSaveTimer = 0;
+  let settingsSaveInFlight = false;
+  let settingsSaveQueued = false;
+  let keepHistorySearchFocus = false;
+  const HISTORY_SEARCH_DEBOUNCE_MS = 500;
+  const SETTINGS_SAVE_DEBOUNCE_MS = 260;
+
+  function shouldRunHistorySearch(value) {
+    const query = String(value || "").trim();
+    return query.length === 0 || query.length >= 2;
+  }
+
+  function scheduleHistorySearch(immediate = false) {
+    if (historyFilterTimer) {
+      window.clearTimeout(historyFilterTimer);
+      historyFilterTimer = 0;
+    }
+    if (!shouldRunHistorySearch(state.historyPanel.q)) {
+      return;
+    }
+    const run = () => {
+      historyFilterTimer = 0;
+      void loadHistory(true);
+    };
+    if (immediate) {
+      run();
+      return;
+    }
+    historyFilterTimer = window.setTimeout(run, HISTORY_SEARCH_DEBOUNCE_MS);
+  }
+
+  async function flushSettingsDraftSave() {
+    if (!state.settingsDraft) return;
+    if (settingsSaveInFlight) {
+      settingsSaveQueued = true;
+      return;
+    }
+    settingsSaveInFlight = true;
+    try {
+      await apiCall("save_settings", state.settingsDraft);
+    } finally {
+      settingsSaveInFlight = false;
+      if (settingsSaveQueued) {
+        settingsSaveQueued = false;
+        void flushSettingsDraftSave();
+      }
+    }
+  }
+
+  function scheduleSettingsSave(immediate = false) {
+    if (!state.settingsOpen || !state.settingsDraft) return;
+    if (settingsSaveTimer) {
+      window.clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = 0;
+    }
+    const run = () => {
+      settingsSaveTimer = 0;
+      void flushSettingsDraftSave();
+    };
+    if (immediate) {
+      run();
+      return;
+    }
+    settingsSaveTimer = window.setTimeout(run, SETTINGS_SAVE_DEBOUNCE_MS);
+  }
 
   function showToast(type, text) {
     state.toast = { type: type || "", text: text || "" };
@@ -239,7 +412,12 @@
         state.settingsDraft = clone(payload.config);
       }
     }
-    if (payload.settings) state.settings = payload.settings;
+    if (payload.settings) {
+      state.settings = payload.settings;
+      if (payload.settings.historyFilters?.directions?.length) {
+        state.historyPanel.filters.directions = payload.settings.historyFilters.directions;
+      }
+    }
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
     if (payload.triggerMode) state.triggerMode = payload.triggerMode;
@@ -405,7 +583,7 @@
       selection.style.top = `${top}px`;
       selection.style.width = `${width}px`;
       selection.style.height = `${height}px`;
-      selection.dataset.size = `${Math.round((width / overlayRoot.clientWidth) * bounds.width)} × ${Math.round((height / overlayRoot.clientHeight) * bounds.height)}`;
+      selection.dataset.size = `${Math.round((width / overlayRoot.clientWidth) * bounds.width)} x ${Math.round((height / overlayRoot.clientHeight) * bounds.height)}`;
     };
 
     overlayRoot.addEventListener("mousedown", (event) => {
@@ -451,7 +629,7 @@
     const showResultCard = Boolean(state.pending || result);
     const mainResultClass = state.pending ? (result ? "pending-streaming" : "pending-waiting") : "";
     const mainResultContent = state.pending && !result ? skeletonMarkup("main") : escapeHtml(result);
-    const historyRows = state.ui.history || [];
+    const historyPanel = state.historyPanel;
     const settings = state.settings || { offlineModels: [], offlineRuntimeReady: false, offlineRuntimeHint: "" };
     const draft = state.settingsDraft || clone(state.config || {});
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
@@ -469,6 +647,10 @@
       { value: "click", label: "点击" },
       { value: "hover", label: "悬停" },
     ];
+    const historyDirectionOptions = (historyPanel.filters?.directions || ["all"]).map((value) => ({
+      value,
+      label: value === "all" ? "全部方向" : value,
+    }));
     const aiTestIcon = state.testingAi ? icons.history : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.history);
     const notice = state.notice
       ? `<div class="notice ${escapeHtml(state.notice.type || "")}">${escapeHtml(state.notice.text || "")}</div>`
@@ -525,36 +707,82 @@
       <aside class="side-sheet ${state.historyOpen ? "open" : ""}">
         <div class="sheet-backdrop" data-action="close-history"></div>
         <div class="sheet-panel">
-          <div class="sheet-header">
+          <div class="panel-drag-hitbox" data-drag-handle="history-top"></div>
+          <div class="sheet-header" data-drag-handle="history-header">
             <div class="sheet-title">历史记录</div>
             <button class="icon-button" data-action="close-history">${icons.close}</button>
           </div>
-          <div class="sheet-scroll-shell">
-            <div class="history-list" id="historyList" data-preserve-scroll="history">
-            ${historyRows.length ? historyRows.map((item, index) => `
-              <article class="history-card" data-action="load-history" data-index="${index}">
-                <div class="history-meta">
-                  <span>${escapeHtml(item.created_at || "")}</span>
-                  <span>${escapeHtml(item.action || "")} · ${escapeHtml(item.mode || "")}</span>
-                </div>
-                <div class="history-text">${escapeHtml((item.source_text || "").slice(0, 120))}</div>
-              </article>`).join("") : `<div class="notice">暂无历史记录</div>`}
+          <div class="history-toolbar">
+            <div class="history-tabs">
+              <button class="history-tab ${historyPanel.tab === "recent" ? "active" : ""}" data-action="history-set-tab" data-tab="recent">最近</button>
+              <button class="history-tab ${historyPanel.tab === "favorites" ? "active" : ""}" data-action="history-set-tab" data-tab="favorites">收藏</button>
             </div>
+            <div class="history-filters">
+              <div class="history-search-row">
+                <input class="history-search" data-history-field="q" placeholder="搜索原文或译文" value="${escapeHtml(historyPanel.q)}" />
+                <button class="icon-button history-search-trigger" data-action="history-search-now" aria-label="立即搜索">${icons.search}</button>
+              </div>
+              <div class="history-filter-row">
+                <select data-history-field="mode">
+                  <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>全部模式</option>
+                  <option value="argos" ${historyPanel.mode === "argos" ? "selected" : ""}>词典</option>
+                  <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
+                </select>
+                <select data-history-field="source_kind">
+                  <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>全部来源</option>
+                  <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手输</option>
+                  <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>划词</option>
+                  <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>截图</option>
+                </select>
+              </div>
+              <div class="history-filter-row">
+                <select data-history-field="direction">
+                  ${historyDirectionOptions.map((opt) => `<option value="${escapeHtml(opt.value)}" ${historyPanel.direction === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+                </select>
+                <select data-history-field="range_days">
+                  <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>全部时间</option>
+                  <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7天内</option>
+                  <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30天内</option>
+                  <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90天内</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-scroll-shell" id="historyList" data-preserve-scroll="history">
+            <div class="history-list">
+            ${historyPanel.items.length ? `
+              ${historyPanel.items.map((item) => `
+                <article class="history-card" data-history-id="${item.id}">
+                  <div class="history-meta">
+                    <span>${escapeHtml(item.created_at || "")}</span>
+                    <span>${escapeHtml(historySourceLabel(item.source_kind))} · ${escapeHtml(historyModeLabel(item.mode))} · 使用 ${Number(item.use_count || 0)} 次</span>
+                  </div>
+                  <div class="history-text history-source">${escapeHtml((item.source_text || "").slice(0, 180))}</div>
+                  <div class="history-text history-result">${escapeHtml((item.result_text || "").slice(0, 180))}</div>
+                  <div class="history-actions">
+                    <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
+                    <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}">${icons.copy}</button>
+                    <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}">${icons.clipboard}</button>
+                    <button class="mini-button" data-action="history-refill" data-history-id="${item.id}">${icons.expand}</button>
+                  </div>
+                </article>`).join("")}
+              ${historyPanel.has_more ? `<button class="ghost-button history-load-more" data-action="history-load-more" ${historyPanel.loading ? "disabled" : ""}>${historyPanel.loading ? "加载中..." : "加载更多（50条）"}</button>` : ""}
+            ` : `<div class="notice">${historyPanel.loading ? "加载中..." : "暂无历史记录"}</div>`}
           </div>
           <div class="settings-actions">
             <button class="ghost-button" data-action="clear-history">${icons.trash}<span>清空历史</span></button>
           </div>
         </div>
-      </aside>
-      <aside class="side-sheet ${state.settingsOpen ? "open" : ""}">
+      </aside>      <aside class="side-sheet ${state.settingsOpen ? "open" : ""}">
         <div class="sheet-backdrop" data-action="close-settings"></div>
         <div class="sheet-panel">
-          <div class="sheet-header">
+          <div class="panel-drag-hitbox" data-drag-handle="settings-top"></div>
+          <div class="sheet-header" data-drag-handle="settings-header">
             <div class="sheet-title">设置</div>
             <button class="icon-button" data-action="close-settings">${icons.close}</button>
           </div>
-          <div class="sheet-scroll-shell">
-            <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
+          <div class="sheet-scroll-shell" id="settingsScroll" data-preserve-scroll="settings">
+            <div class="settings-scroll">
             ${notice}
             <section class="setting-group">
               <div class="setting-title">外观</div>
@@ -586,9 +814,24 @@
                 <label>默认方向</label>
                 ${choiceGroupMarkup("offline.preferred_direction", draft.offline?.preferred_direction || "auto", directionOptions)}
               </div>
-              <div class="notice ${settings.offlineRuntimeReady ? "" : "warning"}">${escapeHtml(settings.offlineRuntimeReady ? settings.offlineDiagnostics || "Argos 运行库可用" : settings.offlineRuntimeHint || "Argos 运行库未就绪")}</div>
+              <div class="notice ${settings.offlineRuntimeReady ? "" : "warning"}">${escapeHtml(settings.offlineRuntimeReady ? (settings.offlineDiagnostics || "Argos 运行库可用") : (settings.offlineRuntimeHint || "Argos 运行库未就绪"))}</div>
               <div class="settings-actions">
-                <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入 Argos 模型</span></button>
+                 <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入 Argos 模型</span></button>
+              </div>
+            </section>
+            <section class="setting-group">
+              <div class="setting-title">历史设置</div>
+              <div class="field">
+                <label>历史保留时长</label>
+                ${choiceGroupMarkup("history.retention_days", String(draft.history?.retention_days ?? 30), [
+                  { value: "7", label: "7 天" },
+                  { value: "30", label: "30 天" },
+                  { value: "90", label: "90 天" },
+                ])}
+                <small>超出保留时长的历史会自动清理。</small>
+              </div>
+              <div class="settings-actions">
+                <button class="ghost-button" data-action="clear-history-from-settings">${icons.trash}<span>一键清理历史</span></button>
               </div>
             </section>
             <section class="setting-group">
@@ -603,10 +846,12 @@
                     <label>划词触发模式</label>
                     ${choiceGroupMarkup("interaction.selection_trigger_mode", selectionTriggerMode, selectionModeOptions)}
                   </div>
+                  ${selectionTriggerMode === "icon" ? `
                   <div class="field">
                     <label>图标触发方式</label>
                     ${choiceGroupMarkup("interaction.selection_icon_trigger", draft.interaction?.selection_icon_trigger || "click", iconTriggerOptions)}
                   </div>
+                  ` : ""}
                 </div>
                 ${selectionTriggerMode === "icon" ? `
                   <div class="field">
@@ -621,10 +866,6 @@
                 <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
               </div>
             </section>
-            </div>
-          </div>
-          <div class="settings-actions">
-            <button class="ghost-button" data-action="save-settings">${icons.settings}<span>保存设置</span></button>
           </div>
         </div>
       </aside>
@@ -665,11 +906,10 @@
     root.innerHTML = `
       <div class="bubble-shell">
         <section class="bubble-card">
+          <div class="panel-drag-hitbox" data-drag-handle="bubble-top"></div>
           <header class="bubble-header" data-drag-handle="bubble-header">
-            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.book}</button>
-            <div class="bubble-title">
-              <span class="bubble-title-text">selected text</span>
-            </div>
+            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.pin}</button>
+            <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
               <button class="mode-chip ${mode === "argos" ? "active" : ""}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译">${icons.book}</button>
               <button class="mode-chip ${mode === "ai" ? "active" : ""}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译">${icons.robot}</button>
@@ -762,6 +1002,7 @@
       case "open-history":
         state.historyOpen = true;
         rerender();
+        void loadHistory(true);
         break;
       case "close-history":
         state.historyOpen = false;
@@ -839,11 +1080,13 @@
       case "set-theme-draft":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
         state.settingsDraft.theme_mode = actionTarget.dataset.theme || "system";
+        scheduleSettingsSave(true);
         rerender();
         break;
       case "set-setting-choice":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
         setValue(state.settingsDraft, actionTarget.dataset.field || "", actionTarget.dataset.value || "");
+        scheduleSettingsSave(true);
         rerender();
         break;
       case "cycle-direction":
@@ -867,12 +1110,6 @@
       case "close-app":
         await apiCall("close_window");
         break;
-      case "save-settings":
-        if (state.settingsDraft) {
-          await apiCall("save_settings", state.settingsDraft);
-          state.notice = { type: "success", text: "设置已保存" };
-        }
-        break;
       case "test-ai":
         state.testingAi = true;
         state.aiTestState = "idle";
@@ -887,21 +1124,60 @@
         state.settingsDraft.openai.base_url = "http://127.0.0.1:11434/v1";
         state.settingsDraft.openai.api_key = "ollama";
         if (!state.settingsDraft.openai.model) state.settingsDraft.openai.model = "qwen2.5:7b";
+        scheduleSettingsSave(true);
         rerender();
         break;
       case "clear-history":
         if (window.confirm("确定清空本地历史记录吗？")) {
-          await apiCall("clear_history");
+          await apiCall("clear_history", { scope: "all" });
+          await loadHistory(true);
         }
         break;
-      case "load-history": {
-        const index = Number(actionTarget.dataset.index || "0");
-        const item = state.ui.history[index];
-        if (item) {
+      case "clear-history-from-settings":
+        if (window.confirm("确定清空本地历史记录吗？")) {
+          await apiCall("clear_history", { scope: "all" });
+          await loadHistory(true);
+        }
+        break;
+      case "history-set-tab":
+        state.historyPanel.tab = actionTarget.dataset.tab === "favorites" ? "favorites" : "recent";
+        state.historyPanel.offset = 0;
+        await loadHistory(true);
+        break;
+      case "history-search-now":
+        keepHistorySearchFocus = true;
+        scheduleHistorySearch(true);
+        break;
+      case "history-load-more":
+        if (state.historyPanel.has_more && !state.historyPanel.loading) {
+          await loadHistory(false);
+        }
+        break;
+      case "history-favorite": {
+        const id = Number(actionTarget.dataset.historyId || "0");
+        const favorite = String(actionTarget.dataset.favorite || "0") === "1";
+        if (id > 0) {
+          await apiCall("toggle_history_favorite", id, favorite);
+          await loadHistory(true);
+        }
+        break;
+      }
+      case "history-copy-source":
+      case "history-copy-result":
+      case "history-refill": {
+        const id = Number(actionTarget.dataset.historyId || "0");
+        const item = state.historyPanel.items.find((x) => Number(x.id) === id);
+        if (!item) break;
+        if (action === "history-copy-source") {
+          await apiCall("copy_text", item.source_text || "");
+        } else if (action === "history-copy-result") {
+          await apiCall("copy_text", item.result_text || "");
+        } else {
           state.sourceText = item.source_text || "";
           state.resultText = item.result_text || "";
           state.pending = false;
           state.historyOpen = false;
+          await apiCall("use_history_record", id);
           rerender();
         }
         break;
@@ -922,6 +1198,20 @@
   }
 
   function handleInput(event) {
+    const historyField = event.target.dataset.historyField;
+    if (historyField) {
+      let value = event.target.value;
+      if (historyField === "range_days") {
+        value = Number(value || 0);
+      }
+      state.historyPanel[historyField] = value;
+      if (historyField === "q") {
+        return;
+      }
+      scheduleHistorySearch(true);
+      return;
+    }
+
     if (event.target.id === "sourceText") {
       state.sourceText = event.target.value;
       return;
@@ -934,6 +1224,10 @@
     }
     const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
     setValue(state.settingsDraft, field, value);
+    if (state.settingsOpen) {
+      const immediate = event.target.type === "checkbox" || event.type === "change";
+      scheduleSettingsSave(immediate);
+    }
     if (field.startsWith("openai.")) {
       state.aiTestState = "idle";
     }
@@ -992,6 +1286,9 @@
         state.pending = false;
         state.mainReqId = 0;
         state.ui.history = payload.history || state.ui.history;
+        if (state.historyOpen) {
+          void loadHistory(true);
+        }
         if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.sourceText = state.sourceText;
           state.zoomPayload.resultText = state.resultText;
@@ -1025,6 +1322,9 @@
         break;
       case "history-updated":
         state.ui.history = payload.history || [];
+        if (state.historyOpen) {
+          void loadHistory(true);
+        }
         break;
       case "ai-test-result":
         state.testingAi = false;
@@ -1134,6 +1434,22 @@
   function handleKeydown(event) {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
+
+    if (target.classList.contains("history-search")) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        keepHistorySearchFocus = true;
+        scheduleHistorySearch(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        state.historyPanel.q = "";
+        target.value = "";
+        keepHistorySearchFocus = true;
+        scheduleHistorySearch(true);
+      }
+      return;
+    }
+
     const shortcutField = target.dataset.shortcutField;
     if (!shortcutField) return;
 
@@ -1164,6 +1480,10 @@
   document.addEventListener("scroll", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    if (target.id === "historyList") {
+      state.historyPanel.scrollTop = target.scrollTop;
+      return;
+    }
     const key = target.dataset.autoscroll;
     if (!key) return;
     scrollFollowState[key] = isNearScrollEnd(target);

@@ -41,8 +41,17 @@ class WindowApi:
     def copy_text(self, text: str) -> dict[str, Any]:
         return self._controller.copy_text(text)
 
-    def clear_history(self) -> dict[str, Any]:
-        return self._controller.clear_history()
+    def clear_history(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._controller.clear_history(payload or {})
+
+    def list_history(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._controller.list_history(payload or {})
+
+    def toggle_history_favorite(self, record_id: int, favorite: bool) -> dict[str, Any]:
+        return self._controller.toggle_history_favorite(int(record_id), bool(favorite))
+
+    def use_history_record(self, record_id: int) -> dict[str, Any]:
+        return self._controller.use_history_record(int(record_id))
 
     def load_settings(self) -> dict[str, Any]:
         return self._controller.get_settings_payload(probe_runtime=True)

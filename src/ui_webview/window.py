@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ctypes
 import threading
@@ -57,6 +57,7 @@ class WordPackWebviewApp:
         self.config: AppConfig = self.config_store.load()
 
         self.history = HistoryStore(self.data_dir / "history.db")
+        self._prune_history_by_policy()
         self.service = TranslationService(self.get_config)
         self.ocr_service = ScreenshotOCRService()
         self.selection_capture = SelectionCaptureService()
@@ -189,7 +190,11 @@ class WordPackWebviewApp:
     def _centered_position(self, width: int, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()
         x = bounds.left + max(0, (bounds.width - width) // 2)
-        y = bounds.top + max(0, (bounds.height - height) // 2)
+        # Keep startup position slightly above geometric center so expanded panels
+        # are less likely to overflow below the visible screen.
+        center_y = bounds.top + max(0, (bounds.height - height) // 2)
+        y_bias = min(120, max(56, height // 5))
+        y = max(bounds.top + 8, center_y - y_bias)
         return x, y
 
     def _hotkey_map(self) -> dict[str, str]:
@@ -521,15 +526,91 @@ class WordPackWebviewApp:
             target_height = max(self.MAIN_MIN_HEIGHT, min(self.MAIN_HEIGHT, requested))
         if compact == self._main_compact and int(current_height) == int(target_height):
             return {"ok": True, "compact": compact}
-        self._apply_main_geometry(x, y, width, target_height)
+        bounds = get_virtual_screen_bounds()
+        max_x = max(bounds.left + 8, bounds.right - int(width) - 8)
+        max_y = max(bounds.top + 8, bounds.bottom - int(target_height) - 8)
+        clamped_x = min(max(bounds.left + 8, int(x)), int(max_x))
+        clamped_y = min(max(bounds.top + 8, int(y)), int(max_y))
+        self._apply_main_geometry(clamped_x, clamped_y, width, target_height)
         self._main_compact = compact
         return {"ok": True, "compact": compact}
 
     def _serialize_config(self) -> dict[str, Any]:
         return asdict(self.config)
 
-    def get_history_rows(self) -> list[dict[str, str]]:
+    @staticmethod
+    def _history_source_kind_from_action(action: str) -> str:
+        text = str(action or "").strip().lower()
+        if "截图" in action or "screenshot" in text:
+            return "screenshot"
+        if "划词" in action or "selection" in text:
+            return "selection"
+        return "manual"
+
+    def _prune_history_by_policy(self) -> int:
+        days = int(getattr(self.config.history, "retention_days", 30) or 30)
+        if days not in {7, 30, 90}:
+            days = 30
+            self.config.history.retention_days = days
+        return self.history.prune_older_than(days)
+
+    def get_history_rows(self) -> list[dict[str, Any]]:
         return self.history.list_recent(limit=120)
+
+    def _history_filters_payload(self) -> dict[str, Any]:
+        return {
+            "directions": ["all", *self.history.distinct_directions()],
+            "retentionDays": int(getattr(self.config.history, "retention_days", 30) or 30),
+        }
+
+    def list_history(self, payload: dict[str, Any]) -> dict[str, Any]:
+        args = payload if isinstance(payload, dict) else {}
+        tab = str(args.get("tab", "recent") or "recent").strip().lower()
+        if tab not in {"recent", "favorites"}:
+            tab = "recent"
+        q = str(args.get("q", "") or "").strip()
+        mode = str(args.get("mode", "all") or "all").strip().lower()
+        if mode not in {"all", "argos", "ai"}:
+            mode = "all"
+        direction = str(args.get("direction", "all") or "all").strip()
+        source_kind = str(args.get("source_kind", "all") or "all").strip().lower()
+        if source_kind not in {"all", "manual", "selection", "screenshot"}:
+            source_kind = "all"
+        try:
+            range_days = int(args.get("range_days", 0) or 0)
+        except Exception:
+            range_days = 0
+        if range_days not in {0, 7, 30, 90}:
+            range_days = 0
+        try:
+            limit = int(args.get("limit", 50) or 50)
+        except Exception:
+            limit = 50
+        try:
+            offset = int(args.get("offset", 0) or 0)
+        except Exception:
+            offset = 0
+
+        result = self.history.list_records(
+            tab=tab,
+            q=q,
+            mode=mode,
+            direction=direction,
+            source_kind=source_kind,
+            range_days=range_days,
+            limit=limit,
+            offset=offset,
+        )
+        result["filters"] = self._history_filters_payload()
+        return result
+
+    def toggle_history_favorite(self, record_id: int, favorite: bool) -> dict[str, Any]:
+        ok = self.history.set_favorite(record_id, favorite)
+        return {"ok": bool(ok), "id": int(record_id), "favorite": bool(favorite)}
+
+    def use_history_record(self, record_id: int) -> dict[str, Any]:
+        ok = self.history.increment_use_count(record_id)
+        return {"ok": bool(ok), "id": int(record_id)}
 
     def get_settings_payload(self, probe_runtime: bool = False) -> dict[str, Any]:
         offline_ready = self.service.offline_runtime_ready(probe=probe_runtime)
@@ -540,6 +621,7 @@ class WordPackWebviewApp:
             "offlineRuntimeHint": self.service.offline_runtime_hint(probe=probe_runtime),
             "offlineDiagnostics": self.service.offline_diagnostics(probe=probe_runtime),
             "effectiveTheme": self._resolved_theme_mode(),
+            "historyFilters": self._history_filters_payload(),
         }
 
     def set_translation_mode(self, mode: str) -> dict[str, Any]:
@@ -612,7 +694,7 @@ class WordPackWebviewApp:
         if notify:
             self.bridge.send("main", "status", {"text": text})
 
-    def _cancel_active_translation(self, message: str = "翻译已取消") -> bool:
+    def _cancel_active_translation(self, message: str = "Translation cancelled") -> bool:
         with self.lock:
             req_id = self._active_translate_request_seq
             cancel_event = self._active_translate_cancel
@@ -650,14 +732,14 @@ class WordPackWebviewApp:
         )
 
     def cancel_translation(self) -> dict[str, Any]:
-        cancelled = self._cancel_active_translation("翻译已取消")
+        cancelled = self._cancel_active_translation("Translation cancelled")
         return {"ok": True, "cancelled": bool(cancelled)}
 
     def _start_translate(self, text: str, action: str, show_bubble: bool, update_main: bool | None = None) -> dict[str, Any]:
         source_text = str(text or "").strip()
         if not source_text:
-            self.set_status("请输入文本")
-            return {"ok": False, "message": "请输入文本"}
+            self.set_status("Please enter text")
+            return {"ok": False, "message": "Please enter text"}
 
         with self.lock:
             previous_cancel = self._active_translate_cancel
@@ -733,7 +815,7 @@ class WordPackWebviewApp:
                 flush()
                 self._handle_translate_done(req_id, source_text, result, action, mode, show_bubble, update_main)
             except Exception as exc:
-                if should_cancel() or "请求已取消" in str(exc):
+                if should_cancel() or "cancel" in str(exc).lower():
                     return
                 flush()
                 self.logger.exception("Translate worker failed action=%s mode=%s", action, mode)
@@ -815,7 +897,15 @@ class WordPackWebviewApp:
             self._active_translation_text = result_text
             current_show_bubble = self._active_translate_shows_bubble
 
-        self.history.add_record(action, mode, source_text, result_text)
+        self.history.add_record(
+            action,
+            mode,
+            source_text,
+            result_text,
+            source_kind=self._history_source_kind_from_action(action),
+            direction=str(self.config.offline.preferred_direction or "auto"),
+        )
+        self._prune_history_by_policy()
         history_rows = self.get_history_rows()
         with self.lock:
             self.ui_state.history = history_rows
@@ -915,19 +1005,27 @@ class WordPackWebviewApp:
 
     def copy_text(self, text: str) -> dict[str, Any]:
         ok = set_clipboard_text(str(text or ""))
-        message = "已复制内容" if ok else "复制失败"
+        message = "Copied" if ok else "Copy failed"
         self.set_status(message)
         return {"ok": ok, "message": message}
 
-    def clear_history(self) -> dict[str, Any]:
-        self.history.clear()
+    def clear_history(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        scope = "all"
+        if isinstance(payload, dict):
+            scope = str(payload.get("scope", "all") or "all").strip().lower()
+        if scope == "non_favorite":
+            self.history.clear_non_favorite()
+        elif scope == "favorites":
+            self.history.clear_favorites()
+        else:
+            self.history.clear()
         history_rows = self.get_history_rows()
         with self.lock:
             self.ui_state.history = history_rows
-        self.set_status("历史记录已清空")
-        payload = {"history": history_rows}
-        self.bridge.send("main", "history-updated", payload)
-        return payload
+        self.set_status("History cleared")
+        response = {"history": history_rows, "filters": self._history_filters_payload()}
+        self.bridge.send("main", "history-updated", response)
+        return response
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         openai = payload.get("openai", {}) if isinstance(payload, dict) else {}
@@ -962,12 +1060,18 @@ class WordPackWebviewApp:
             icon_delay_ms = self.config.interaction.selection_icon_delay_ms
 
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
+        history_cfg = payload.get("history", {}) if isinstance(payload, dict) else {}
+        try:
+            retention_days = int(history_cfg.get("retention_days", self.config.history.retention_days))
+        except Exception:
+            retention_days = self.config.history.retention_days
 
         self.config.interaction.selection_enabled = bool(interaction.get("selection_enabled", self.config.interaction.selection_enabled))
         self.config.interaction.selection_trigger_mode = trigger_mode
         self.config.interaction.selection_icon_trigger = icon_trigger
         self.config.interaction.screenshot_hotkey = screenshot_hotkey
         self.config.interaction.selection_icon_delay_ms = max(300, min(5000, icon_delay_ms))
+        self.config.history.retention_days = retention_days if retention_days in {7, 30, 90} else 30
 
         if theme_mode not in {"system", "light", "dark"}:
             theme_mode = "system"
@@ -975,6 +1079,7 @@ class WordPackWebviewApp:
         self.ui_state.theme_mode = self._resolved_theme_mode(theme_mode)
         self.ui_state.direction = self._direction_label()
         self.config_store.save(self.config)
+        self._prune_history_by_policy()
         try:
             self.hotkeys.stop()
             self.hotkeys.start()
@@ -984,7 +1089,7 @@ class WordPackWebviewApp:
         if self.config.translation_mode == "argos":
             self.set_status(self.service.offline_diagnostics())
         else:
-            self.set_status("AI 配置已保存")
+            self.set_status("AI settings saved")
 
         response = self._config_event_payload()
         self.bridge.send("main", "config-updated", response)
@@ -1023,7 +1128,7 @@ class WordPackWebviewApp:
             return {"ok": False, "message": message}
 
         if not selected:
-            return {"ok": False, "message": "已取消导入"}
+            return {"ok": False, "message": "Import cancelled"}
 
         file_path = selected[0] if isinstance(selected, (list, tuple)) else selected
         self.set_status("正在导入离线模型...")
@@ -1044,7 +1149,7 @@ class WordPackWebviewApp:
 
     def start_screenshot_capture(self, show_bubble: bool) -> dict[str, Any]:
         if self.overlay_window is not None:
-            return {"ok": False, "message": "截图操作已在进行中"}
+            return {"ok": False, "message": "Screenshot capture is already running"}
 
         main_hidden_before = self.hidden
         if self.main_window is not None and not self.hidden:
@@ -1103,13 +1208,13 @@ class WordPackWebviewApp:
         self.overlay_window = None
         self._restore_main_after_screenshot()
         self._screenshot_session = None
-        self.set_status("截图已取消")
+        self.set_status("Screenshot cancelled")
         return {"ok": True}
 
     def finish_screenshot_selection(self, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._screenshot_session
         if session is None:
-            return {"ok": False, "message": "截图会话不存在"}
+            return {"ok": False, "message": "Screenshot session not found"}
 
         if self.overlay_window is not None:
             try:
@@ -1354,9 +1459,9 @@ class WordPackWebviewApp:
 
         if self._bubble_state.pinned:
             self._cancel_bubble_hide_timer()
-            self.set_status("气泡已固定")
+            self.set_status("Bubble pinned")
         else:
-            self.set_status("气泡已取消固定")
+            self.set_status("Bubble unpinned")
             if not self._bubble_state.pending:
                 self._schedule_bubble_auto_hide()
 
@@ -1441,7 +1546,7 @@ class WordPackWebviewApp:
 
         text = candidate.text.strip() or self._capture_selected_text(candidate.payload).strip()
         if not text:
-            message = "未检测到可翻译文本"
+            message = "No translatable text detected"
             self.set_status(message)
             self._show_bubble(
                 source_text="划词翻译",
