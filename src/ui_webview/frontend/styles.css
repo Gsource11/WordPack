@@ -849,6 +849,20 @@ body.view-main .modal-panel {
   position: relative;
 }
 
+.history-sheet-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-sheet-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 .modal-panel {
   inset: 0;
   min-height: 0;
@@ -894,14 +908,38 @@ body.view-main .modal-panel {
 
 .history-list,
 .settings-scroll {
-  flex: 1 1 auto;
   min-height: 0;
-  overflow-y: scroll;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--stroke-soft);
+  background: var(--panel-muted);
+  padding: 10px;
+  overflow-y: auto;
   overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+  background-clip: padding-box;
+}
+
+.history-sheet-panel .history-list {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.history-sheet-panel .settings-actions {
+  flex: 0 0 auto;
+}
+
+.settings-sheet-panel .settings-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.history-list > * + *,
+.settings-scroll > * + * {
+  margin-top: var(--space-2);
 }
 
 .history-toolbar {
@@ -963,29 +1001,8 @@ body.view-main .modal-panel {
   border-radius: 10px;
 }
 
-.sheet-scroll-shell {
-  flex: 1 1 auto;
-  min-height: 0;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--stroke-soft);
-  background: var(--panel-muted);
-  overflow-y: auto;
-  overflow-x: hidden;
-  box-sizing: border-box;
-  background-clip: padding-box;
-  padding: 10px;
-  scrollbar-gutter: stable;
-}
-
-.sheet-scroll-shell .history-list,
-.sheet-scroll-shell .settings-scroll {
-  height: auto;
-  min-height: 100%;
-  padding: 0;
-  overflow: visible;
-}
-
-body.view-main .sheet-scroll-shell {
+body.view-main .history-list,
+body.view-main .settings-scroll {
   border-color: #c3cad4;
   background: #d6d9de;
 }
@@ -1003,19 +1020,16 @@ body.view-main .history-card {
   background: #e0e4ea;
 }
 
-.sheet-scroll-shell::-webkit-scrollbar,
 .history-list::-webkit-scrollbar,
 .settings-scroll::-webkit-scrollbar {
   width: 10px;
 }
 
-.sheet-scroll-shell::-webkit-scrollbar-track,
 .history-list::-webkit-scrollbar-track,
 .settings-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.sheet-scroll-shell::-webkit-scrollbar-thumb,
 .history-list::-webkit-scrollbar-thumb,
 .settings-scroll::-webkit-scrollbar-thumb {
   background: rgba(80, 97, 120, 0.5);

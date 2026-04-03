@@ -706,7 +706,7 @@
       </div>
       <aside class="side-sheet ${state.historyOpen ? "open" : ""}">
         <div class="sheet-backdrop" data-action="close-history"></div>
-        <div class="sheet-panel">
+        <div class="sheet-panel history-sheet-panel">
           <div class="panel-drag-hitbox" data-drag-handle="history-top"></div>
           <div class="sheet-header" data-drag-handle="history-header">
             <div class="sheet-title">历史记录</div>
@@ -748,8 +748,7 @@
               </div>
             </div>
           </div>
-          <div class="sheet-scroll-shell" id="historyList" data-preserve-scroll="history">
-            <div class="history-list">
+          <div class="history-list" id="historyList" data-preserve-scroll="history">
             ${historyPanel.items.length ? `
               ${historyPanel.items.map((item) => `
                 <article class="history-card" data-history-id="${item.id}">
@@ -775,14 +774,13 @@
         </div>
       </aside>      <aside class="side-sheet ${state.settingsOpen ? "open" : ""}">
         <div class="sheet-backdrop" data-action="close-settings"></div>
-        <div class="sheet-panel">
+        <div class="sheet-panel settings-sheet-panel">
           <div class="panel-drag-hitbox" data-drag-handle="settings-top"></div>
           <div class="sheet-header" data-drag-handle="settings-header">
             <div class="sheet-title">设置</div>
             <button class="icon-button" data-action="close-settings">${icons.close}</button>
           </div>
-          <div class="sheet-scroll-shell" id="settingsScroll" data-preserve-scroll="settings">
-            <div class="settings-scroll">
+          <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
             ${notice}
             <section class="setting-group">
               <div class="setting-title">外观</div>
