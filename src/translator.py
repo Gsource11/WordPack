@@ -3,6 +3,7 @@
 import json
 import re
 import sys
+import time
 from typing import Any, Callable
 from urllib import error, parse, request
 
@@ -212,23 +213,16 @@ class OfflineTranslator:
     def __init__(self, cfg_getter) -> None:
         self.cfg_getter = cfg_getter
         self.argos = ArgosOfflineTranslator()
+        self._status_cache_ttl_sec = 12.0
+        self._status_cache: dict[str, Any] | None = None
 
     def _preferred_direction(self) -> str:
         cfg: AppConfig = self.cfg_getter()
         value = str(getattr(cfg.offline, "preferred_direction", "auto") or "auto").strip()
         return value or "auto"
 
-    def list_models(self) -> list[dict[str, str]]:
-        return self.argos.list_directions()
-
-    def import_model_file(self, model_path: str) -> str:
-        return self.argos.install_model_file(model_path)
-
-    def runtime_ready(self, probe: bool = False) -> bool:
-        return self.argos.runtime_ready(probe=probe)
-
-    def runtime_hint(self, probe: bool = False) -> str:
-        if self.runtime_ready(probe=probe):
+    def _runtime_hint_from_status(self, runtime_ready: bool, probe: bool) -> str:
+        if runtime_ready:
             return "离线模型运行库已就绪"
         if not probe and not self.argos.import_attempted():
             return "离线模型运行库将按需检测；打开设置页或首次使用离线模型时再加载。"
@@ -243,14 +237,12 @@ class OfflineTranslator:
             f"{suffix}"
         )
 
-    def diagnostics(self, probe: bool = False) -> str:
+    def _diagnostics_from_status(self, runtime_ready: bool, items: list[dict[str, str]], probe: bool) -> str:
         preferred = self._preferred_direction()
         if not probe and not self.argos.import_attempted():
             return "Argos 运行库将按需检测；首次翻译或打开设置页时再加载。"
 
-        items = self.argos.list_directions()
-
-        if not self.runtime_ready(probe=probe):
+        if not runtime_ready:
             return "Argos 运行库缺失，请安装依赖或使用发布版。"
 
         if not items:
@@ -262,6 +254,62 @@ class OfflineTranslator:
             return f"已配置 {preferred}，但该方向模型不可用，当前将自动匹配。"
 
         return "Argos 已启用（自动匹配方向）"
+
+    def _cache_fresh(self, now: float) -> bool:
+        if not self._status_cache:
+            return False
+        stamp = float(self._status_cache.get("ts", 0.0) or 0.0)
+        return (now - stamp) <= self._status_cache_ttl_sec
+
+    def _invalidate_status_cache(self) -> None:
+        self._status_cache = None
+
+    def status(self, probe: bool = False, force_refresh: bool = False) -> dict[str, Any]:
+        now = time.monotonic()
+        if not force_refresh and self._cache_fresh(now):
+            cached = self._status_cache or {}
+            return {
+                "runtime_ready": bool(cached.get("runtime_ready", False)),
+                "runtime_hint": str(cached.get("runtime_hint", "")),
+                "diagnostics": str(cached.get("diagnostics", "")),
+                "models": list(cached.get("models", [])),
+            }
+
+        runtime_ready = bool(self.argos.runtime_ready(probe=probe))
+        models = self.argos.list_directions() if runtime_ready else []
+        hint = self._runtime_hint_from_status(runtime_ready, probe=probe)
+        diagnostics = self._diagnostics_from_status(runtime_ready, models, probe=probe)
+
+        self._status_cache = {
+            "ts": now,
+            "runtime_ready": runtime_ready,
+            "runtime_hint": hint,
+            "diagnostics": diagnostics,
+            "models": list(models),
+        }
+        return {
+            "runtime_ready": runtime_ready,
+            "runtime_hint": hint,
+            "diagnostics": diagnostics,
+            "models": list(models),
+        }
+
+    def list_models(self, probe: bool = False) -> list[dict[str, str]]:
+        return self.status(probe=probe)["models"]
+
+    def import_model_file(self, model_path: str) -> str:
+        result = self.argos.install_model_file(model_path)
+        self._invalidate_status_cache()
+        return result
+
+    def runtime_ready(self, probe: bool = False) -> bool:
+        return bool(self.status(probe=probe)["runtime_ready"])
+
+    def runtime_hint(self, probe: bool = False) -> str:
+        return str(self.status(probe=probe)["runtime_hint"])
+
+    def diagnostics(self, probe: bool = False) -> str:
+        return str(self.status(probe=probe)["diagnostics"])
 
     def translate(self, text: str) -> str:
         normalized = text.strip()
@@ -975,8 +1023,8 @@ class TranslationService:
     def offline_diagnostics(self, probe: bool = False) -> str:
         return self.offline.diagnostics(probe=probe)
 
-    def list_offline_models(self) -> list[dict[str, str]]:
-        return self.offline.list_models()
+    def list_offline_models(self, probe: bool = False) -> list[dict[str, str]]:
+        return self.offline.list_models(probe=probe)
 
     def import_offline_model(self, model_path: str) -> str:
         return self.offline.import_model_file(model_path)
@@ -986,6 +1034,9 @@ class TranslationService:
 
     def offline_runtime_hint(self, probe: bool = False) -> str:
         return self.offline.runtime_hint(probe=probe)
+
+    def offline_status(self, probe: bool = False, force_refresh: bool = False) -> dict[str, Any]:
+        return self.offline.status(probe=probe, force_refresh=force_refresh)
 
 
 

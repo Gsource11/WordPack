@@ -858,13 +858,14 @@ class WordPackWebviewApp:
         return {"ok": bool(ok), "id": int(record_id)}
 
     def get_settings_payload(self, probe_runtime: bool = False) -> dict[str, Any]:
-        offline_ready = self.service.offline_runtime_ready(probe=probe_runtime)
+        offline_status = self.service.offline_status(probe=probe_runtime)
+        offline_ready = bool(offline_status.get("runtime_ready", False))
         return {
             "config": self._serialize_config(),
-            "offlineModels": self.service.list_offline_models() if offline_ready else [],
+            "offlineModels": list(offline_status.get("models", [])) if offline_ready else [],
             "offlineRuntimeReady": offline_ready,
-            "offlineRuntimeHint": self.service.offline_runtime_hint(probe=probe_runtime),
-            "offlineDiagnostics": self.service.offline_diagnostics(probe=probe_runtime),
+            "offlineRuntimeHint": str(offline_status.get("runtime_hint", "")),
+            "offlineDiagnostics": str(offline_status.get("diagnostics", "")),
             "effectiveTheme": self._resolved_theme_mode(),
             "historyFilters": self._history_filters_payload(),
         }
