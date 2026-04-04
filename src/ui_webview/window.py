@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -53,7 +54,8 @@ class WordPackWebviewApp:
     BUBBLE_HEIGHT = 272
     ICON_WIDTH = 34
     ICON_HEIGHT = 34
-    AI_PROBE_INTERVAL_SEC = 180
+    AI_PROBE_INTERVAL_SEC = 3600
+    AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
 
     def __init__(self) -> None:
         if getattr(sys, "frozen", False):
@@ -73,7 +75,7 @@ class WordPackWebviewApp:
 
         self.history = HistoryStore(self.data_dir / "history.db")
         self._prune_history_by_policy()
-        self.service = TranslationService(self.get_config)
+        self.service = TranslationService(self.get_config, data_dir=self.data_dir)
         self.ocr_service = ScreenshotOCRService()
         self.selection_capture = SelectionCaptureService()
         self.bridge = FrontendBridge(self.logger)
@@ -126,11 +128,12 @@ class WordPackWebviewApp:
         self._active_translate_shows_bubble = False
         self._candidate_request_seq = 0
         self._active_candidate_request_seq = 0
-        self._ai_available = False
-        self._ai_available_checked = False
+        ai_cached = self._load_ai_status_cache()
+        self._ai_available = bool(ai_cached.get("available", False))
+        self._ai_available_checked = bool(ai_cached.get("checked", False))
         self._ai_probe_inflight = False
-        self._ai_availability_message = ""
-        self._ai_availability_checked_at = 0.0
+        self._ai_availability_message = str(ai_cached.get("message", ""))
+        self._ai_availability_checked_at = float(ai_cached.get("checkedAt", 0.0) or 0.0)
         self._ai_probe_thread: threading.Thread | None = None
         self._bubble_state = BubbleState(mode=self.config.translation_mode)
         self._selection_candidate = SelectionCandidate()
@@ -571,13 +574,51 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to reveal main window on startup")
         self._start_input_polling()
-        self._probe_ai_availability_async()
+        if self._should_probe_ai_on_startup():
+            self._probe_ai_availability_async()
         self._start_ai_probe_loop()
         try:
             self.hotkeys.start()
             self.mouse_hooks.start()
         except Exception:
             self.logger.exception("Failed to start global hook services")
+
+    def _ai_status_cache_path(self) -> Path:
+        return self.data_dir / "ai_status_cache.json"
+
+    def _load_ai_status_cache(self) -> dict[str, Any]:
+        path = self._ai_status_cache_path()
+        try:
+            if not path.exists():
+                return {}
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return {}
+            return {
+                "available": bool(raw.get("available", False)),
+                "checked": bool(raw.get("checked", False)),
+                "message": str(raw.get("message", "")),
+                "checkedAt": float(raw.get("checkedAt", 0.0) or 0.0),
+            }
+        except Exception:
+            return {}
+
+    def _save_ai_status_cache(self) -> None:
+        path = self._ai_status_cache_path()
+        payload = self._ai_availability_payload()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            self.logger.exception("Failed to persist AI availability cache")
+
+    def _should_probe_ai_on_startup(self) -> bool:
+        if not self._ai_available_checked:
+            return True
+        checked_at = float(self._ai_availability_checked_at or 0.0)
+        if checked_at <= 0:
+            return True
+        return (time.time() - checked_at) > float(self.AI_STARTUP_CACHE_MAX_AGE_SEC)
 
     def _ai_availability_payload(self) -> dict[str, Any]:
         with self.lock:
@@ -607,6 +648,7 @@ class WordPackWebviewApp:
                     self._ai_available_checked = True
                     self._ai_availability_message = str(message or "")
                     self._ai_availability_checked_at = time.time()
+                self._save_ai_status_cache()
             finally:
                 with self.lock:
                     self._ai_probe_inflight = False
@@ -1647,6 +1689,7 @@ class WordPackWebviewApp:
                 self._ai_available_checked = True
                 self._ai_availability_message = str(message or "")
                 self._ai_availability_checked_at = time.time()
+            self._save_ai_status_cache()
             self.set_status(message)
             self.bridge.send(
                 "main",

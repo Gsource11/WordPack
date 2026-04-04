@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Any, Callable
 from urllib import error, parse, request
 
@@ -210,11 +211,12 @@ class ArgosOfflineTranslator:
 
 
 class OfflineTranslator:
-    def __init__(self, cfg_getter) -> None:
+    def __init__(self, cfg_getter, status_cache_path: Path | None = None) -> None:
         self.cfg_getter = cfg_getter
         self.argos = ArgosOfflineTranslator()
-        self._status_cache_ttl_sec = 12.0
+        self._status_cache_path = Path(status_cache_path) if status_cache_path else None
         self._status_cache: dict[str, Any] | None = None
+        self._load_status_cache_from_disk()
 
     def _preferred_direction(self) -> str:
         cfg: AppConfig = self.cfg_getter()
@@ -255,38 +257,88 @@ class OfflineTranslator:
 
         return "Argos 已启用（自动匹配方向）"
 
-    def _cache_fresh(self, now: float) -> bool:
-        if not self._status_cache:
-            return False
-        stamp = float(self._status_cache.get("ts", 0.0) or 0.0)
-        return (now - stamp) <= self._status_cache_ttl_sec
-
     def _invalidate_status_cache(self) -> None:
         self._status_cache = None
+        if self._status_cache_path is not None:
+            try:
+                self._status_cache_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _load_status_cache_from_disk(self) -> None:
+        if self._status_cache_path is None:
+            return
+        try:
+            if not self._status_cache_path.exists():
+                return
+            raw = json.loads(self._status_cache_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            models = raw.get("models", [])
+            if not isinstance(models, list):
+                models = []
+            self._status_cache = {
+                "ts": float(raw.get("ts", 0.0) or 0.0),
+                "runtime_ready": bool(raw.get("runtime_ready", False)),
+                "runtime_hint": str(raw.get("runtime_hint", "")),
+                "diagnostics": str(raw.get("diagnostics", "")),
+                "models": list(models),
+            }
+        except Exception:
+            self._status_cache = None
+
+    def _persist_status_cache(self) -> None:
+        if self._status_cache_path is None or not self._status_cache:
+            return
+        try:
+            self._status_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts": float(self._status_cache.get("ts", 0.0) or 0.0),
+                "runtime_ready": bool(self._status_cache.get("runtime_ready", False)),
+                "runtime_hint": str(self._status_cache.get("runtime_hint", "")),
+                "diagnostics": str(self._status_cache.get("diagnostics", "")),
+                "models": list(self._status_cache.get("models", [])),
+            }
+            self._status_cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     def status(self, probe: bool = False, force_refresh: bool = False) -> dict[str, Any]:
-        now = time.monotonic()
-        if not force_refresh and self._cache_fresh(now):
-            cached = self._status_cache or {}
-            return {
-                "runtime_ready": bool(cached.get("runtime_ready", False)),
-                "runtime_hint": str(cached.get("runtime_hint", "")),
-                "diagnostics": str(cached.get("diagnostics", "")),
-                "models": list(cached.get("models", [])),
-            }
+        now = time.time()
+        cached = self._status_cache
+        if not force_refresh and cached is not None:
+            cached_ready = bool(cached.get("runtime_ready", False))
+            # Permanent cache + event invalidation:
+            # - probe=False: always trust cached status for startup speed.
+            # - probe=True: reuse positive cache, refresh when cached unavailable.
+            if (not probe) or cached_ready:
+                return {
+                    "runtime_ready": cached_ready,
+                    "runtime_hint": str(cached.get("runtime_hint", "")),
+                    "diagnostics": str(cached.get("diagnostics", "")),
+                    "models": list(cached.get("models", [])),
+                }
 
         runtime_ready = bool(self.argos.runtime_ready(probe=probe))
         models = self.argos.list_directions() if runtime_ready else []
         hint = self._runtime_hint_from_status(runtime_ready, probe=probe)
         diagnostics = self._diagnostics_from_status(runtime_ready, models, probe=probe)
 
-        self._status_cache = {
+        status_payload = {
             "ts": now,
             "runtime_ready": runtime_ready,
             "runtime_hint": hint,
             "diagnostics": diagnostics,
             "models": list(models),
         }
+
+        persistable = probe or self.argos.import_attempted() or runtime_ready or bool(models)
+        if persistable:
+            self._status_cache = status_payload
+            self._persist_status_cache()
+        elif self._status_cache is None:
+            self._status_cache = status_payload
+
         return {
             "runtime_ready": runtime_ready,
             "runtime_hint": hint,
@@ -294,12 +346,19 @@ class OfflineTranslator:
             "models": list(models),
         }
 
+    def refresh_status(self, probe: bool = True) -> dict[str, Any]:
+        return self.status(probe=probe, force_refresh=True)
+
+    def invalidate_status(self) -> None:
+        self._invalidate_status_cache()
+
     def list_models(self, probe: bool = False) -> list[dict[str, str]]:
         return self.status(probe=probe)["models"]
 
     def import_model_file(self, model_path: str) -> str:
         result = self.argos.install_model_file(model_path)
         self._invalidate_status_cache()
+        self.refresh_status(probe=True)
         return result
 
     def runtime_ready(self, probe: bool = False) -> bool:
@@ -973,8 +1032,9 @@ class OpenAICompatibleTranslator:
 
 
 class TranslationService:
-    def __init__(self, cfg_getter) -> None:
-        self.offline = OfflineTranslator(cfg_getter)
+    def __init__(self, cfg_getter, data_dir: Path | None = None) -> None:
+        cache_path = (Path(data_dir) / "offline_status_cache.json") if data_dir is not None else None
+        self.offline = OfflineTranslator(cfg_getter, status_cache_path=cache_path)
         self.ai = OpenAICompatibleTranslator(cfg_getter)
 
     def translate(self, text: str, mode: str) -> str:
