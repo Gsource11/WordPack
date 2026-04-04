@@ -11,6 +11,9 @@ class OpenAIConfig:
     api_key: str = ""
     model: str = "gpt-4o-mini"
     timeout_sec: int = 60
+    multi_candidate_count: int = 3
+    multi_candidate_short_cn_max_chars: int = 24
+    multi_candidate_short_en_max_words: int = 12
 
 
 @dataclass
@@ -23,6 +26,7 @@ class InteractionConfig:
     selection_enabled: bool = True
     selection_trigger_mode: str = "icon"  # icon | double_ctrl
     selection_icon_trigger: str = "click"  # click | hover
+    screenshot_enabled: bool = True
     screenshot_hotkey: str = "Ctrl+Alt+S"
     selection_icon_delay_ms: int = 1500
 
@@ -63,6 +67,7 @@ class ConfigStore:
 
         # Backward compatibility with previous keys.
         legacy_selection_enabled = interaction_raw.get("selection_mouse_enabled", True)
+        legacy_screenshot_enabled = interaction_raw.get("screenshot_hotkey_enabled", True)
 
         cfg = AppConfig(
             translation_mode=str(raw.get("translation_mode", "argos") or "argos").strip().lower(),
@@ -72,6 +77,9 @@ class ConfigStore:
                 api_key=openai_raw.get("api_key", ""),
                 model=openai_raw.get("model", "gpt-4o-mini"),
                 timeout_sec=int(openai_raw.get("timeout_sec", 60)),
+                multi_candidate_count=int(openai_raw.get("multi_candidate_count", 3) or 3),
+                multi_candidate_short_cn_max_chars=int(openai_raw.get("multi_candidate_short_cn_max_chars", 24) or 24),
+                multi_candidate_short_en_max_words=int(openai_raw.get("multi_candidate_short_en_max_words", 12) or 12),
             ),
             offline=OfflineConfig(
                 preferred_direction=offline_raw.get("preferred_direction", "auto"),
@@ -80,10 +88,11 @@ class ConfigStore:
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
                 selection_trigger_mode=str(interaction_raw.get("selection_trigger_mode", "icon") or "icon"),
                 selection_icon_trigger=str(interaction_raw.get("selection_icon_trigger", "click") or "click"),
+                screenshot_enabled=bool(interaction_raw.get("screenshot_enabled", legacy_screenshot_enabled)),
                 screenshot_hotkey=str(
                     interaction_raw.get(
                         "screenshot_hotkey",
-                        "Ctrl+Alt+S" if bool(interaction_raw.get("screenshot_hotkey_enabled", True)) else "",
+                        "Ctrl+Alt+S",
                     )
                     or ""
                 ).strip(),
@@ -110,6 +119,9 @@ class ConfigStore:
         cfg.interaction.selection_icon_delay_ms = max(300, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
         if cfg.history.retention_days not in {7, 30, 90}:
             cfg.history.retention_days = 30
+        cfg.openai.multi_candidate_count = max(2, min(3, int(cfg.openai.multi_candidate_count or 3)))
+        cfg.openai.multi_candidate_short_cn_max_chars = max(8, min(60, int(cfg.openai.multi_candidate_short_cn_max_chars or 24)))
+        cfg.openai.multi_candidate_short_en_max_words = max(4, min(30, int(cfg.openai.multi_candidate_short_en_max_words or 12)))
 
         return cfg
 

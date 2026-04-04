@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import ctypes
+import re
 import threading
 import time
 from ctypes import wintypes
@@ -47,6 +48,7 @@ class WordPackWebviewApp:
     BUBBLE_HEIGHT = 272
     ICON_WIDTH = 34
     ICON_HEIGHT = 34
+    AI_PROBE_INTERVAL_SEC = 180
 
     def __init__(self) -> None:
         self.base_dir = Path(__file__).resolve().parent.parent.parent
@@ -98,6 +100,13 @@ class WordPackWebviewApp:
         self._active_translation_text = ""
         self._active_translate_cancel: threading.Event | None = None
         self._active_translate_shows_bubble = False
+        self._candidate_request_seq = 0
+        self._active_candidate_request_seq = 0
+        self._ai_available = False
+        self._ai_available_checked = False
+        self._ai_probe_inflight = False
+        self._ai_availability_message = ""
+        self._ai_probe_thread: threading.Thread | None = None
         self._bubble_state = BubbleState(mode=self.config.translation_mode)
         self._selection_candidate = SelectionCandidate()
         self._selection_icon_timer: threading.Timer | None = None
@@ -201,12 +210,17 @@ class WordPackWebviewApp:
         return x, y
 
     def _hotkey_map(self) -> dict[str, str]:
+        screenshot_hotkey = ""
+        if self.config.interaction.screenshot_enabled:
+            screenshot_hotkey = normalize_shortcut(self.config.interaction.screenshot_hotkey)
         return {
-            "screenshot_translate": normalize_shortcut(self.config.interaction.screenshot_hotkey),
+            "screenshot_translate": screenshot_hotkey,
         }
 
     def _shortcut_descriptions(self) -> list[str]:
-        screenshot = normalize_shortcut(self.config.interaction.screenshot_hotkey)
+        screenshot = ""
+        if self.config.interaction.screenshot_enabled:
+            screenshot = normalize_shortcut(self.config.interaction.screenshot_hotkey)
         items: list[str] = []
         if screenshot:
             items.append(f"{screenshot} 截图翻译")
@@ -235,6 +249,21 @@ class WordPackWebviewApp:
             self.hidden = False
         except Exception:
             self.logger.exception("Failed to apply main window geometry")
+
+    def _animate_main_height(self, x: int, y: int, width: int, from_height: int, to_height: int) -> None:
+        if self.main_window is None:
+            return
+        delta = int(to_height) - int(from_height)
+        if abs(delta) < 20:
+            self._apply_main_geometry(x, y, width, to_height)
+            return
+        steps = 22
+        for idx in range(1, steps + 1):
+            progress = idx / steps
+            eased = progress * progress * (3 - 2 * progress)
+            h = int(round(from_height + (delta * eased)))
+            self._apply_main_geometry(x, y, width, h)
+            time.sleep(0.01)
 
     def _create_window(
         self,
@@ -399,11 +428,57 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to reveal main window on startup")
         self._start_input_polling()
+        self._probe_ai_availability_async()
+        self._start_ai_probe_loop()
         try:
             self.hotkeys.start()
             self.mouse_hooks.start()
         except Exception:
             self.logger.exception("Failed to start global hook services")
+
+    def _ai_availability_payload(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "available": bool(self._ai_available),
+                "checked": bool(self._ai_available_checked),
+                "message": str(self._ai_availability_message or ""),
+            }
+
+    def _emit_ai_availability(self) -> None:
+        payload = self._ai_availability_payload()
+        self.bridge.send("main", "ai-availability", payload)
+        self.bridge.send("bubble", "ai-availability", payload)
+
+    def _probe_ai_availability_async(self) -> None:
+        with self.lock:
+            if self._ai_probe_inflight:
+                return
+            self._ai_probe_inflight = True
+
+        def worker() -> None:
+            try:
+                ok, message = self.service.test_ai_connection()
+                with self.lock:
+                    self._ai_available = bool(ok)
+                    self._ai_available_checked = True
+                    self._ai_availability_message = str(message or "")
+            finally:
+                with self.lock:
+                    self._ai_probe_inflight = False
+                self._emit_ai_availability()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_ai_probe_loop(self) -> None:
+        if self._ai_probe_thread is not None and self._ai_probe_thread.is_alive():
+            return
+
+        def worker() -> None:
+            while not self._input_poll_stop.wait(self.AI_PROBE_INTERVAL_SEC):
+                self._probe_ai_availability_async()
+
+        self._ai_probe_thread = threading.Thread(target=worker, daemon=True)
+        self._ai_probe_thread.start()
 
     def _on_window_closed(self, kind: str) -> None:
         self.logger.info("Window closed kind=%s", kind)
@@ -449,6 +524,8 @@ class WordPackWebviewApp:
         self.hotkeys.stop()
         if self._input_poll_thread is not None and self._input_poll_thread.is_alive():
             self._input_poll_thread.join(timeout=1.2)
+        if self._ai_probe_thread is not None and self._ai_probe_thread.is_alive():
+            self._ai_probe_thread.join(timeout=0.8)
 
         for kind in ("bubble", "icon", "overlay", "main"):
             window = getattr(self, f"{kind}_window", None)
@@ -470,6 +547,7 @@ class WordPackWebviewApp:
                 "settings": self.get_settings_payload(),
                 "themeMode": self._resolved_theme_mode(),
                 "shortcuts": self._shortcut_descriptions(),
+                "aiAvailability": self._ai_availability_payload(),
             }
         if kind == "bubble":
             return {
@@ -477,6 +555,7 @@ class WordPackWebviewApp:
                 "branding": self._branding_payload(),
                 "themeMode": self._resolved_theme_mode(),
                 "bubble": self._bubble_state.to_payload(),
+                "aiAvailability": self._ai_availability_payload(),
             }
         if kind == "icon":
             return {
@@ -534,7 +613,7 @@ class WordPackWebviewApp:
         max_y = max(bounds.top + 8, bounds.bottom - int(target_height) - 8)
         clamped_x = min(max(bounds.left + 8, int(x)), int(max_x))
         clamped_y = min(max(bounds.top + 8, int(y)), int(max_y))
-        self._apply_main_geometry(clamped_x, clamped_y, width, target_height)
+        self._animate_main_height(clamped_x, clamped_y, width, current_height, target_height)
         self._main_compact = compact
         return {"ok": True, "compact": compact}
 
@@ -632,8 +711,16 @@ class WordPackWebviewApp:
             value = str(mode or "").strip().lower()
             if value not in {"argos", "ai"}:
                 value = "argos"
+            if value == "ai" and not self._ai_available:
+                message = "AI 不可用，请先配置并测试连接"
+                self.set_status(message)
+                return {"ok": False, "message": message, **self._config_event_payload()}
             self.config.translation_mode = value
             self.ui_state.translation_mode = value
+            self._bubble_state.mode = value
+            if value != "ai":
+                self._bubble_state.candidate_pending = False
+                self._bubble_state.candidate_items = []
             self.config_store.save(self.config)
 
         if value == "argos":
@@ -644,6 +731,7 @@ class WordPackWebviewApp:
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
         self.bridge.send("bubble", "theme-updated", {"themeMode": self._resolved_theme_mode(), "mode": value})
+        self._emit_bubble_updated()
         return payload
 
     def set_theme(self, theme: str) -> dict[str, Any]:
@@ -689,7 +777,49 @@ class WordPackWebviewApp:
             "ui": self.ui_state.to_payload(),
             "settings": self.get_settings_payload(),
             "themeMode": self._resolved_theme_mode(),
+            "aiAvailability": self._ai_availability_payload(),
         }
+
+    @staticmethod
+    def _contains_cjk(text: str) -> bool:
+        return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+    def _is_short_text_for_candidates(self, text: str) -> bool:
+        normalized = str(text or "").strip()
+        if not normalized:
+            return False
+        sentence_marks = len(re.findall(r"[.!?。！？]", normalized))
+        if sentence_marks > 1:
+            return False
+
+        if self._contains_cjk(normalized):
+            compact = re.sub(r"\s+", "", normalized)
+            return len(compact) <= int(self.config.openai.multi_candidate_short_cn_max_chars or 24)
+
+        words = re.findall(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)?", normalized)
+        if words:
+            return len(words) <= int(self.config.openai.multi_candidate_short_en_max_words or 12)
+        return len(normalized) <= int(self.config.openai.multi_candidate_short_cn_max_chars or 24)
+
+    def _can_generate_candidates(
+        self,
+        *,
+        source_text: str,
+        mode: str,
+        is_pending: bool,
+        has_result: bool,
+    ) -> tuple[bool, str]:
+        if mode != "ai":
+            return False, "仅 AI 模式支持多候选"
+        if not source_text.strip():
+            return False, "请先输入并翻译"
+        if is_pending:
+            return False, "翻译进行中，请稍后"
+        if not has_result:
+            return False, "请先完成一次翻译"
+        if not self._is_short_text_for_candidates(source_text):
+            return False, "仅短词或短句支持多候选"
+        return True, ""
 
     def set_status(self, text: str, *, notify: bool = True) -> None:
         with self.lock:
@@ -737,6 +867,176 @@ class WordPackWebviewApp:
     def cancel_translation(self) -> dict[str, Any]:
         cancelled = self._cancel_active_translation("Translation cancelled")
         return {"ok": True, "cancelled": bool(cancelled)}
+
+    @staticmethod
+    def _normalize_candidate_text(value: str) -> str:
+        normalized = re.sub(r"\s+", " ", str(value or "").strip()).lower()
+        normalized = re.sub(r"[`~!@#$%^&*()_\-+=\[\]{}|\\:;\"'<>,.?/·，。！？；：“”‘’、（）【】《》…—\s]+", "", normalized)
+        return normalized
+
+    def _sanitize_candidates(self, items: list[str], *, exclude_text: str = "") -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        excluded_norm = self._normalize_candidate_text(exclude_text)
+        for raw in items or []:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            norm = self._normalize_candidate_text(value)
+            if not norm:
+                continue
+            if excluded_norm and norm == excluded_norm:
+                continue
+            if norm in seen:
+                continue
+            seen.add(norm)
+            cleaned.append(value)
+        return cleaned
+
+    @staticmethod
+    def _has_latin(text: str) -> bool:
+        return bool(re.search(r"[A-Za-z]", str(text or "")))
+
+    def _infer_target_lang(self, reference_result: str, source_text: str = "") -> str:
+        ref = str(reference_result or "").strip()
+        if self._contains_cjk(ref):
+            return "zh"
+        if self._has_latin(ref):
+            return "en"
+        src = str(source_text or "").strip()
+        if self._contains_cjk(src):
+            return "en"
+        if self._has_latin(src):
+            return "zh"
+        return "unknown"
+
+    def _matches_target_lang(self, text: str, target_lang: str) -> bool:
+        value = str(text or "").strip()
+        if not value or target_lang == "unknown":
+            return True
+        has_cjk = self._contains_cjk(value)
+        has_latin = self._has_latin(value)
+        if target_lang == "zh":
+            return has_cjk
+        if target_lang == "en":
+            return has_latin
+        return True
+
+    def generate_multi_candidates_from_window(self, kind: str, text: str = "", result_text: str = "") -> dict[str, Any]:
+        source_text = str(text or "").strip()
+        latest_result_text = str(result_text or "").strip()
+        mode = str(self.config.translation_mode or "argos")
+        is_pending = False
+        has_result = False
+
+        if kind == "bubble":
+            with self.lock:
+                source_text = source_text or str(self._bubble_state.source_text or "").strip()
+                latest_result_text = latest_result_text or str(self._bubble_state.result_text or "").strip()
+                is_pending = bool(self._bubble_state.pending or self._bubble_state.candidate_pending)
+                has_result = bool(str(self._bubble_state.result_text or "").strip())
+        else:
+            with self.lock:
+                is_pending = bool(self._active_translate_request_seq > 0 and self._active_translate_cancel and not self._active_translate_cancel.is_set())
+                has_result = bool(latest_result_text)
+
+        ok, message = self._can_generate_candidates(
+            source_text=source_text,
+            mode=mode,
+            is_pending=is_pending,
+            has_result=has_result,
+        )
+        if not ok:
+            return {"ok": False, "message": message}
+
+        # V1 requirement: always generate 4 additional candidates
+        count = 4
+        with self.lock:
+            self._candidate_request_seq += 1
+            req_id = self._candidate_request_seq
+            self._active_candidate_request_seq = req_id
+
+        if kind == "bubble":
+            with self.lock:
+                self._bubble_state.candidate_pending = True
+                self._bubble_state.candidate_items = []
+            self._emit_bubble_updated()
+        else:
+            self.bridge.send(
+                "main",
+                "multi-candidates-start",
+                {"reqId": req_id, "sourceText": source_text, "count": count},
+            )
+
+        def worker() -> None:
+            try:
+                gathered: list[str] = []
+                seen_norm = {self._normalize_candidate_text(latest_result_text)} if latest_result_text else set()
+                target_lang = self._infer_target_lang(latest_result_text, source_text)
+                for _attempt in range(6):
+                    needed = count - len(gathered)
+                    if needed <= 0:
+                        break
+                    try:
+                        raw_candidates = self.service.translate_candidates(
+                            source_text,
+                            mode,
+                            count=needed,
+                            reference_result=latest_result_text,
+                        )
+                    except Exception:
+                        continue
+                    for candidate in self._sanitize_candidates(raw_candidates, exclude_text=latest_result_text):
+                        if not self._matches_target_lang(candidate, target_lang):
+                            continue
+                        norm = self._normalize_candidate_text(candidate)
+                        if not norm or norm in seen_norm:
+                            continue
+                        seen_norm.add(norm)
+                        gathered.append(candidate)
+                    if len(gathered) >= count:
+                        break
+                if not gathered:
+                    raise RuntimeError("候选数量不足，请重试")
+                candidates = gathered[:count]
+                with self.lock:
+                    if req_id != self._active_candidate_request_seq:
+                        return
+                if kind == "bubble":
+                    with self.lock:
+                        self._bubble_state.candidate_pending = False
+                        self._bubble_state.candidate_items = list(candidates)
+                    self._emit_bubble_updated()
+                else:
+                    self.bridge.send(
+                        "main",
+                        "multi-candidates-done",
+                        {"reqId": req_id, "sourceText": source_text, "candidates": list(candidates)},
+                    )
+            except Exception as exc:
+                error_text = str(exc) or "候选生成失败"
+                with self.lock:
+                    if req_id != self._active_candidate_request_seq:
+                        return
+                if kind == "bubble":
+                    with self.lock:
+                        self._bubble_state.candidate_pending = False
+                        self._bubble_state.candidate_items = []
+                    self._emit_bubble_updated()
+                    self.bridge.send(
+                        "bubble",
+                        "multi-candidates-error",
+                        {"reqId": req_id, "sourceText": source_text, "message": error_text},
+                    )
+                else:
+                    self.bridge.send(
+                        "main",
+                        "multi-candidates-error",
+                        {"reqId": req_id, "sourceText": source_text, "message": error_text},
+                    )
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True, "started": True, "reqId": req_id}
 
     def _start_translate(self, text: str, action: str, show_bubble: bool, update_main: bool | None = None) -> dict[str, Any]:
         source_text = str(text or "").strip()
@@ -899,6 +1199,9 @@ class WordPackWebviewApp:
                 return
             self._active_translation_text = result_text
             current_show_bubble = self._active_translate_shows_bubble
+            self._active_translate_request_seq = 0
+            self._active_translate_cancel = None
+            self._active_translate_shows_bubble = False
 
         self.history.add_record(
             action,
@@ -964,6 +1267,9 @@ class WordPackWebviewApp:
                 return
             partial = self._active_translation_text
             current_show_bubble = self._active_translate_shows_bubble
+            self._active_translate_request_seq = 0
+            self._active_translate_cancel = None
+            self._active_translate_shows_bubble = False
 
         self.set_status(message)
         if update_main:
@@ -1062,6 +1368,7 @@ class WordPackWebviewApp:
         except Exception:
             icon_delay_ms = self.config.interaction.selection_icon_delay_ms
 
+        screenshot_enabled = bool(interaction.get("screenshot_enabled", self.config.interaction.screenshot_enabled))
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
         history_cfg = payload.get("history", {}) if isinstance(payload, dict) else {}
         try:
@@ -1072,6 +1379,7 @@ class WordPackWebviewApp:
         self.config.interaction.selection_enabled = bool(interaction.get("selection_enabled", self.config.interaction.selection_enabled))
         self.config.interaction.selection_trigger_mode = trigger_mode
         self.config.interaction.selection_icon_trigger = icon_trigger
+        self.config.interaction.screenshot_enabled = screenshot_enabled
         self.config.interaction.screenshot_hotkey = screenshot_hotkey
         self.config.interaction.selection_icon_delay_ms = max(300, min(5000, icon_delay_ms))
         self.config.history.retention_days = retention_days if retention_days in {7, 30, 90} else 30
@@ -1099,6 +1407,7 @@ class WordPackWebviewApp:
         resolved = self._resolved_theme_mode()
         self.bridge.send("bubble", "theme-updated", {"themeMode": resolved, "bubble": self._bubble_state.to_payload()})
         self.bridge.send("icon", "theme-updated", {"themeMode": resolved, "mode": self.config.translation_mode})
+        self._probe_ai_availability_async()
         return response
 
     def test_ai_connection(self) -> None:
@@ -1106,8 +1415,13 @@ class WordPackWebviewApp:
 
         def worker() -> None:
             ok, message = self.service.test_ai_connection()
+            with self.lock:
+                self._ai_available = bool(ok)
+                self._ai_available_checked = True
+                self._ai_availability_message = str(message or "")
             self.set_status(message)
             self.bridge.send("main", "ai-test-result", {"ok": ok, "message": message})
+            self._emit_ai_availability()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1313,6 +1627,7 @@ class WordPackWebviewApp:
         anchor: tuple[int, int] | None = None,
         preserve_position: bool = False,
         preserve_height: bool = False,
+        preserve_candidates: bool = False,
         refresh_auto_hide: bool = True,
     ) -> None:
         width = self.BUBBLE_WIDTH
@@ -1329,6 +1644,8 @@ class WordPackWebviewApp:
             x, y = self._bubble_position(anchor, height)
 
         with self.lock:
+            candidate_pending = self._bubble_state.candidate_pending if preserve_candidates else False
+            candidate_items = list(self._bubble_state.candidate_items) if preserve_candidates else []
             self._bubble_state = BubbleState(
                 visible=True,
                 pinned=self._bubble_state.pinned,
@@ -1337,6 +1654,8 @@ class WordPackWebviewApp:
                 mode=mode,
                 source_text=source_text,
                 result_text=result_text,
+                candidate_pending=candidate_pending,
+                candidate_items=candidate_items,
                 x=x,
                 y=y,
                 width=width,
@@ -1367,22 +1686,16 @@ class WordPackWebviewApp:
             except Exception:
                 self.logger.exception("Failed to update bubble window geometry")
 
-        self.bridge.send(
-            "bubble",
-            "bubble-updated",
-            {
-                "themeMode": self._resolved_theme_mode(),
-                "bubble": self._bubble_state.to_payload(),
-            },
-        )
-        self.bridge.send(
-            "main",
-            "bubble-updated",
-            {
-                "themeMode": self._resolved_theme_mode(),
-                "bubble": self._bubble_state.to_payload(),
-            },
-        )
+        self._emit_bubble_updated()
+
+    def _emit_bubble_updated(self) -> None:
+        payload = {
+            "themeMode": self._resolved_theme_mode(),
+            "bubble": self._bubble_state.to_payload(),
+        }
+        self.bridge.send("bubble", "bubble-updated", payload)
+        self.bridge.send("main", "bubble-updated", payload)
+
     def _update_bubble(
         self,
         source_text: str,
@@ -1408,6 +1721,7 @@ class WordPackWebviewApp:
             mode=mode,
             preserve_position=True,
             preserve_height=True,
+            preserve_candidates=True,
             refresh_auto_hide=refresh_auto_hide,
         )
 
@@ -1468,7 +1782,7 @@ class WordPackWebviewApp:
             if not self._bubble_state.pending:
                 self._schedule_bubble_auto_hide()
 
-        self.bridge.send("bubble", "bubble-updated", {"themeMode": self._resolved_theme_mode(), "bubble": payload})
+        self._emit_bubble_updated()
         return {"ok": True, "bubble": payload}
 
     def open_zoom_from_bubble(self) -> dict[str, Any]:
@@ -1690,7 +2004,7 @@ class WordPackWebviewApp:
             return
 
         if event == "screenshot_translate":
-            if normalize_shortcut(self.config.interaction.screenshot_hotkey):
+            if self.config.interaction.screenshot_enabled and normalize_shortcut(self.config.interaction.screenshot_hotkey):
                 self.start_screenshot_capture(show_bubble=True)
             return
 
@@ -2092,13 +2406,15 @@ class WordPackWebviewApp:
                             self._translate_pending_selection()
                     self._fb_last_ctrl_tap_at = now
 
-                combo_s = self._shortcut_is_active(
-                    self.config.interaction.screenshot_hotkey,
-                    ctrl_down=ctrl_down,
-                    alt_down=alt_down,
-                    shift_down=shift_down,
-                    key_state_getter=windll.user32.GetAsyncKeyState,
-                )
+                combo_s = False
+                if self.config.interaction.screenshot_enabled:
+                    combo_s = self._shortcut_is_active(
+                        self.config.interaction.screenshot_hotkey,
+                        ctrl_down=ctrl_down,
+                        alt_down=alt_down,
+                        shift_down=shift_down,
+                        key_state_getter=windll.user32.GetAsyncKeyState,
+                    )
                 if combo_s and not self._fb_last_combo_s:
                     if self.config.interaction.screenshot_hotkey:
                         self.start_screenshot_capture(show_bubble=True)

@@ -45,6 +45,7 @@
       (function () {
         var rev = window.__WORDPACK_ASSET_REV__ || String(Date.now());
         var js = document.createElement("script");
+        js.charset = "utf-8";
         js.src = "./app.js?v=" + encodeURIComponent(rev);
         document.body.appendChild(js);
       })();

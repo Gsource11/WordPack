@@ -25,6 +25,8 @@ class BubbleState:
     mode: str = "argos"
     source_text: str = ""
     result_text: str = ""
+    candidate_pending: bool = False
+    candidate_items: list[str] = field(default_factory=list)
     x: int | None = None
     y: int | None = None
     width: int = 408

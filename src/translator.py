@@ -750,15 +750,67 @@ class OpenAICompatibleTranslator:
                 raise RuntimeError(f"OpenAI兼容接口失败: {openai_err} | Ollama原生接口失败: {ollama_exc}") from ollama_exc
             raise RuntimeError(f"Ollama原生接口失败: {ollama_exc}") from ollama_exc
 
+    @staticmethod
+    def _translation_system_prompt() -> str:
+        return (
+            "你是专业翻译助手。默认把输入翻译为简体中文。"
+            "若输入本身为中文，则翻译为自然英文。"
+            "仅输出翻译结果，不要解释。"
+        )
+
+    @staticmethod
+    def _extract_json_payload(raw: str) -> dict[str, Any]:
+        text = str(raw or "").strip()
+        if not text:
+            raise RuntimeError("AI 响应为空")
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+        match = re.search(r"\{[\s\S]*\}", text)
+        if not match:
+            raise RuntimeError("候选解析失败：未找到 JSON 对象")
+        try:
+            data = json.loads(match.group(0))
+        except Exception as exc:
+            raise RuntimeError(f"候选解析失败：{exc}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("候选解析失败：JSON 顶层不是对象")
+        return data
+
+    def _parse_candidate_list(self, raw: str, expected_count: int) -> list[str]:
+        payload = self._extract_json_payload(raw)
+        items = payload.get("candidates", [])
+        if not isinstance(items, list):
+            raise RuntimeError("候选解析失败：candidates 字段不是数组")
+
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(text)
+            if len(cleaned) >= expected_count:
+                break
+
+        # 允许返回部分候选，由上层重试聚合，避免一次不足导致整次失败。
+        if not cleaned:
+            raise RuntimeError("候选数量不足，请重试")
+        return cleaned
+
     def translate(self, text: str) -> str:
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是专业翻译助手。默认把输入翻译为简体中文。"
-                    "若输入本身为中文，则翻译为自然英文。"
-                    "仅输出翻译结果，不要解释。"
-                ),
+                "content": self._translation_system_prompt(),
             },
             {"role": "user", "content": text.strip()},
         ]
@@ -768,15 +820,42 @@ class OpenAICompatibleTranslator:
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是专业翻译助手。默认把输入翻译为简体中文。"
-                    "若输入本身为中文，则翻译为自然英文。"
-                    "仅输出翻译结果，不要解释。"
-                ),
+                "content": self._translation_system_prompt(),
             },
             {"role": "user", "content": text.strip()},
         ]
         return self._chat(messages, temperature=0.15, purpose="translate", on_delta=on_delta, should_cancel=should_cancel)
+
+    def translate_candidates(self, text: str, count: int = 4, reference_result: str = "") -> list[str]:
+        normalized = str(text or "").strip()
+        reference = str(reference_result or "").strip()
+        target_count = max(2, min(4, int(count or 4)))
+        target_lang_hint = "ZH" if re.search(r"[\u4e00-\u9fff]", reference) else ("EN" if re.search(r"[A-Za-z]", reference) else "AUTO")
+        reference_clause = (
+            f'候选译文必须与参考译文保持同一目标语言、同一语体方向。参考译文："{reference}"。'
+            if reference
+            else "候选译文必须保持与常见翻译方向一致，不要切换目标语言。"
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{self._translation_system_prompt()}"
+                    "你还需要为同一输入给出多个候选译文版本，语义保持一致，但语气或用词略有差异。"
+                    f"{reference_clause}"
+                    "候选之间不得重复，也不得与参考译文重复。"
+                    "严格禁止改变翻译方向：若参考译文为英文，则所有候选必须是英文；若参考译文为中文，则所有候选必须是中文。"
+                    "禁止输出原文语言，禁止中英混写。"
+                    f"目标语言标记：{target_lang_hint}。你必须严格遵守该标记。"
+                    "输出必须是 JSON 对象，格式为 "
+                    '{"candidates":["候选1","候选2","候选3","候选4"]}。'
+                    f"只返回 {target_count} 条候选，不要添加解释。"
+                ),
+            },
+            {"role": "user", "content": normalized},
+        ]
+        raw = self._chat(messages, temperature=0.35, purpose="translate")
+        return self._parse_candidate_list(raw, target_count)
 
     def polish(self, text: str) -> str:
         messages = [
@@ -884,6 +963,11 @@ class TranslationService:
         if mode != "ai":
             raise ValueError("润色仅支持 AI 模式")
         return self.ai.polish_stream(text, on_delta, should_cancel=should_cancel)
+
+    def translate_candidates(self, text: str, mode: str, count: int = 4, reference_result: str = "") -> list[str]:
+        if mode != "ai":
+            raise ValueError("多候选仅支持 AI 模式")
+        return self.ai.translate_candidates(text, count=count, reference_result=reference_result)
 
     def test_ai_connection(self) -> tuple[bool, str]:
         return self.ai.test_connection()

@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const root = document.getElementById("app");
   const params = new URLSearchParams(window.location.search);
   const initialView = params.get("view") || "main";
@@ -27,14 +27,21 @@
     zoomPayload: null,
     sourceText: "",
     resultText: "",
+    candidatePending: false,
+    candidateItems: [],
+    candidateReqId: 0,
     pending: false,
     mainReqId: 0,
     testingAi: false,
     aiTestState: "idle",
+    aiAvailable: false,
+    aiAvailableChecked: false,
+    aiAvailabilityMessage: "",
     notice: null,
     toast: null,
     shortcuts: [],
     bubble: null,
+    bubbleCandidatePaneOpen: false,
     triggerMode: "click",
     overlay: null,
     overlayReady: false,
@@ -79,6 +86,7 @@
     close: icon("<path d='M6 6l12 12M18 6l-12 12'/>"),
     book: icon("<path d='M4.5 6a1.5 1.5 0 0 1 1.5-1.5H8c1.8 0 3.2.45 4 1.35.8-.9 2.2-1.35 4-1.35h2a1.5 1.5 0 0 1 1.5 1.5v11.4a.6.6 0 0 1-.6.6H16c-1.6 0-2.85.3-3.75.92a.45.45 0 0 1-.5 0C10.85 18.3 9.6 18 8 18H5.1a.6.6 0 0 1-.6-.6Z'/><path d='M12 5.9V18.9'/><path d='M7.4 8.1h1.3M15.3 8.1h1.3'/>"),
     robot: icon("<path d='M12 4v3'/><rect x='4' y='7' width='16' height='12' rx='4'/><path d='M9 12h.01M15 12h.01M8 16h8'/>"),
+    candidates: icon("<path d='M7 7h10M7 12h7M7 17h5'/><circle cx='18' cy='12' r='2'/><circle cx='16.5' cy='17' r='1.5'/><circle cx='18.5' cy='7' r='1.5'/>"),
     copy: icon("<rect x='9' y='9' width='10' height='10' rx='2'/><path d='M5 15V7a2 2 0 0 1 2-2h8'/>"),
     trash: icon("<path d='M4 7h16'/><path d='M10 11v6M14 11v6'/><path d='M6 7l1 12h10l1-12'/><path d='M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2'/>"),
     expand: icon("<path d='M15 4h5v5M9 20H4v-5M20 15v5h-5M4 9V4h5'/><path d='M14 10l6-6M10 14l-6 6'/>"),
@@ -89,6 +97,7 @@
     clipboard: icon("<rect x='8' y='4' width='8' height='4' rx='1.5'/><path d='M9 6H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2'/>"),
     moon: icon("<path d='M21 12.7A9 9 0 1 1 11.3 3a7 7 0 0 0 9.7 9.7Z'/>"),
     sun: icon("<circle cx='12' cy='12' r='4'/><path d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/>"),
+    link: icon("<path d='M10 14 14 10'/><path d='M8.5 6.5a3 3 0 0 1 4.2 0l.8.8a3 3 0 0 1 0 4.2l-.6.6'/><path d='M11.1 12.9l-.6.6a3 3 0 0 1-4.2 0l-.8-.8a3 3 0 0 1 0-4.2l.6-.6'/>"),
     check: icon("<path d='M20 6 9 17l-5-5'/>"),
     error: icon("<circle cx='12' cy='12' r='9'/><path d='M9 9l6 6M15 9l-6 6'/>"),
   };
@@ -140,11 +149,94 @@
         return "截图";
       case "manual":
       default:
-        return "手输";
+        return "手动";
     }
   };
 
   const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : "词典");
+
+  const candidateThresholds = () => ({
+    cn: Number(state.config?.openai?.multi_candidate_short_cn_max_chars || 24),
+    enWords: Number(state.config?.openai?.multi_candidate_short_en_max_words || 12),
+  });
+
+  function isShortForCandidates(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    const sentenceMarks = (value.match(/[.!?\u3002\uFF01\uFF1F]/g) || []).length;
+    if (sentenceMarks > 1) return false;
+    const thresholds = candidateThresholds();
+    const hasCjk = /[\u4e00-\u9fff]/.test(value);
+    if (hasCjk) {
+      const compact = value.replace(/\s+/g, "");
+      return compact.length <= Math.max(8, thresholds.cn);
+    }
+    const words = value.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)?/g) || [];
+    if (words.length) {
+      return words.length <= Math.max(4, thresholds.enWords);
+    }
+    return value.length <= Math.max(8, thresholds.cn);
+  }
+
+  function candidateAvailability({ mode, sourceText, pending, hasResult, aiAvailable, aiAvailableChecked }) {
+    const currentMode = String(mode || "").toLowerCase();
+    const canUseAi = aiAvailable === true;
+    if (!canUseAi) {
+      return {
+        enabled: false,
+        tip: aiAvailableChecked ? "需要先配置并连接 AI 模式" : "正在检测 AI 可用性，请稍后",
+      };
+    }
+    if (!String(sourceText || "").trim()) {
+      return { enabled: false, tip: "请先输入并翻译" };
+    }
+    if (pending) {
+      return { enabled: false, tip: "翻译进行中，请稍后" };
+    }
+    if (!hasResult) {
+      return { enabled: false, tip: "请先完成一次翻译" };
+    }
+    if (!isShortForCandidates(sourceText)) {
+      return { enabled: false, tip: "仅短词或短句支持多候选" };
+    }
+    if (currentMode !== "ai" && canUseAi) {
+      return { enabled: true, tip: "将自动切换到 AI 并生成 4 个候选译文" };
+    }
+    return { enabled: true, tip: "生成 4 个候选译文" };
+  }
+  const formatAllCandidates = (items) =>
+    (Array.isArray(items) ? items : [])
+      .map((item, index) => `${index + 1}. ${String(item || "").trim()}`)
+      .filter(Boolean)
+      .join("\n");
+  function normalizeCandidateText(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s`~!@#$%^&*()_\-+=\[\]{}|\\:;"'<>,.?/·，。！？；：“”‘’、（）【】《》…—]+/g, "");
+  }
+
+  function dedupeCandidateItems(items) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(items) ? items : []) {
+      const value = String(raw || "").trim();
+      if (!value) continue;
+      const key = normalizeCandidateText(value);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    return out;
+  }
+
+  function getMainDisplayedCandidates() {
+    return dedupeCandidateItems(state.candidateItems).slice(0, 4);
+  }
+
+  function getBubbleDisplayedCandidates() {
+    return dedupeCandidateItems(state.bubble?.candidate_items || []).slice(0, 4);
+  }
 
   function historyQueryPayload(reset = false) {
     const panel = state.historyPanel;
@@ -250,7 +342,6 @@
     if (!resultCard) return false;
     const shouldShow = Boolean(state.pending || state.resultText);
     resultCard.classList.toggle("hidden", !shouldShow);
-    resultCard.style.display = shouldShow ? "" : "none";
     const windowCard = document.querySelector(".window-card");
     if (windowCard) {
       windowCard.classList.toggle("no-result", !shouldShow);
@@ -388,6 +479,11 @@
       if (payload.settings.historyFilters?.directions?.length) {
         state.historyPanel.filters.directions = payload.settings.historyFilters.directions;
       }
+    }
+    if (payload.aiAvailability) {
+      state.aiAvailable = Boolean(payload.aiAvailability.available);
+      state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
+      state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
     }
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
@@ -605,6 +701,7 @@
     const draft = state.settingsDraft || clone(state.config || {});
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "icon";
+    const screenshotEnabled = draft.interaction?.screenshot_enabled !== false;
     const screenshotHotkey = draft.interaction?.screenshot_hotkey ?? "";
     const directionOptions = Array.from(new Set([
       "auto",
@@ -622,13 +719,31 @@
       value,
       label: value === "all" ? "全部方向" : value,
     }));
-    const aiTestIcon = state.testingAi ? icons.history : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.history);
+    const aiTestIcon = state.testingAi ? icons.link : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.link);
     const notice = state.notice
       ? `<div class="notice ${escapeHtml(state.notice.type || "")}">${escapeHtml(state.notice.text || "")}</div>`
       : "";
     const toast = state.toast
       ? `<div class="global-toast ${escapeHtml(state.toast.type || "")}">${escapeHtml(state.toast.text || "")}</div>`
       : "";
+    const mainCandidateState = candidateAvailability({
+      mode,
+      sourceText: state.sourceText,
+      pending: state.pending || state.candidatePending,
+      hasResult: Boolean(result),
+      aiAvailable: state.aiAvailable,
+      aiAvailableChecked: state.aiAvailableChecked,
+    });
+    const aiModeEnabled = Boolean(state.aiAvailable);
+    const mainCandidateDisabled = !mainCandidateState.enabled || state.candidatePending;
+    const showCandidatePane = Boolean(state.candidatePending || (state.candidateItems || []).length);
+    const mainDisplayedCandidates = getMainDisplayedCandidates();
+    const mainCopyAll = showCandidatePane && mainDisplayedCandidates.length > 0;
+    const mainCandidateRows = mainDisplayedCandidates.map((item, index) => `
+      <div class="candidate-item">
+        <div class="candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
+        <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="复制此候选">${icons.copy}</button>
+      </div>`).join("");
 
     root.innerHTML = `
       <div class="window-shell">
@@ -644,7 +759,7 @@
           <div class="segmented">
             <div class="seg-track">
               <button class="seg-btn ${mode === "argos" ? "active" : ""}" data-action="set-mode" data-mode="argos">${icons.book}<span>词典翻译</span></button>
-              <button class="seg-btn ${mode === "ai" ? "active" : ""}" data-action="set-mode" data-mode="ai">${icons.robot}<span>AI 翻译</span></button>
+              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai">${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
           <section class="card input-card">
@@ -661,16 +776,24 @@
             <div class="card-head">
               <div class="card-title">翻译结果</div>
               <div class="result-actions">
-                <button class="mini-button" data-action="copy-result">${icons.copy}</button>
+                <button class="mini-button ${mainCandidateDisabled ? "disabled" : ""}" id="mainCandidateBtn" data-action="generate-candidates-main">${icons.candidates}</button>
                 <button class="mini-button" data-action="open-zoom">${icons.expand}</button>
               </div>
             </div>
-            <div class="result-pane ${mainResultClass}" id="resultPane" data-preserve-scroll="result">
-              <div class="result-scroll" id="resultScroll" data-autoscroll="main-result">${mainResultContent}</div>
+            <div class="result-workbench ${showCandidatePane ? "with-candidates" : ""}">
+              <div class="result-pane ${mainResultClass}" id="resultPane" data-preserve-scroll="result">
+                <div class="result-scroll" id="resultScroll" data-autoscroll="main-result">${mainResultContent}</div>
+              </div>
+              <aside class="candidate-pane ${showCandidatePane ? "open" : ""}" id="mainCandidatePane">
+                <div class="candidate-list">
+                  ${mainCandidateRows || `<div class="candidate-placeholder">点击右上角按钮生成候选</div>`}
+                  ${state.candidatePending ? `<div class="candidate-placeholder">候选生成中...</div>` : ""}
+                </div>
+              </aside>
             </div>
           </section>
           <div class="footer-actions">
-            <button class="ghost-button" data-action="copy-result">${icons.copy}<span>复制</span></button>
+            <button class="ghost-button" data-action="copy-result" ${mainCopyAll ? 'title="复制全部候选译文" aria-label="复制全部候选译文"' : 'aria-label="复制"'}>${icons.copy}<span>复制</span></button>
             <button class="ghost-button" data-action="clear-all">${icons.trash}<span>清空</span></button>
           </div>
         </section>
@@ -709,7 +832,7 @@
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="source_kind">
                       <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>全部</option>
-                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手输</option>
+                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手动</option>
                       <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>划词</option>
                       <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>截图</option>
                     </select>
@@ -730,9 +853,9 @@
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="range_days">
                       <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>全部</option>
-                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7天内</option>
-                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30天内</option>
-                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90天内</option>
+                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7 天内</option>
+                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30 天内</option>
+                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90 天内</option>
                     </select>
                   </span>
                 </label>
@@ -827,7 +950,6 @@
               <div class="setting-title">操作设置</div>
               <div class="field">
                 <label class="toggle-row"><input type="checkbox" data-field="interaction.selection_enabled" ${selectionEnabled ? "checked" : ""}/>启用划词</label>
-                <small>关闭后隐藏所有划词相关设置。</small>
               </div>
               ${selectionEnabled ? `
                 <div class="field-row">
@@ -850,10 +972,15 @@
                 ` : ""}
               ` : ""}
               <div class="field">
-                <label>截图快捷键</label>
-                <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="按下新的快捷键组合" readonly />
-                <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
+                <label class="toggle-row"><input type="checkbox" data-field="interaction.screenshot_enabled" ${screenshotEnabled ? "checked" : ""}/>启用截图翻译</label>
               </div>
+              ${screenshotEnabled ? `
+                <div class="field">
+                  <label>截图翻译快捷键</label>
+                  <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="按下新的快捷键组合" readonly />
+                  <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
+                </div>
+              ` : ""}
             </section>
           </div>
         </div>
@@ -888,29 +1015,65 @@
   }
 
   function renderBubble() {
-    const bubble = state.bubble || { source_text: "", result_text: "", pending: false, pinned: false, action: "划词翻译" };
-    const mode = state.config?.translation_mode || state.ui?.translation_mode || bubble.mode || "argos";
+    const bubble = state.bubble || {
+      source_text: "",
+      result_text: "",
+      pending: false,
+      pinned: false,
+      action: "划词翻译",
+      candidate_pending: false,
+      candidate_items: [],
+    };
+    const mode = bubble.mode || "argos";
     const bubbleResultClass = bubble.pending ? ((bubble.result_text || "") ? "pending-streaming" : "pending-waiting") : "";
     const bubbleResultContent = bubble.pending && !bubble.result_text ? skeletonMarkup("bubble") : escapeHtml(bubble.result_text || "暂无结果");
+    const bubbleCandidateItems = Array.isArray(bubble.candidate_items) ? bubble.candidate_items : [];
+    const bubbleCandidateState = candidateAvailability({
+      mode,
+      sourceText: bubble.source_text,
+      pending: Boolean(bubble.pending || bubble.candidate_pending),
+      hasResult: Boolean((bubble.result_text || "").trim()),
+      aiAvailable: state.aiAvailable,
+      aiAvailableChecked: state.aiAvailableChecked,
+    });
+    const bubbleModeAiEnabled = Boolean(state.aiAvailable);
+    const bubbleCandidateDisabled = !bubbleCandidateState.enabled || bubble.candidate_pending;
+    const showBubbleCandidatePane = Boolean(state.bubbleCandidatePaneOpen || bubble.candidate_pending || bubbleCandidateItems.length);
+    const bubbleDisplayedCandidates = (String(bubble.result_text || "").trim() ? [String(bubble.result_text || "").trim(), ...dedupeCandidateItems(bubbleCandidateItems)] : dedupeCandidateItems(bubbleCandidateItems)).slice(0, 4);
+    const bubbleCandidateRows = bubbleDisplayedCandidates.map((item, index) => `
+      <div class="bubble-candidate-item">
+        <div class="bubble-candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
+        <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="复制此候选">${icons.copy}</button>
+      </div>
+    `).join("");
     root.innerHTML = `
       <div class="bubble-shell">
         <section class="bubble-card">
           <div class="panel-drag-hitbox" data-drag-handle="bubble-top"></div>
           <header class="bubble-header" data-drag-handle="bubble-header">
             <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.pin}</button>
+            <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble">${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
               <button class="mode-chip ${mode === "argos" ? "active" : ""}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译">${icons.book}</button>
-              <button class="mode-chip ${mode === "ai" ? "active" : ""}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译">${icons.robot}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" title="${bubbleModeAiEnabled ? "切换到 AI 翻译" : "AI 不可用，请先配置连接"}">${icons.robot}</button>
             </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
           </header>
           <div class="bubble-content bubble-content-single">
-            <div class="bubble-stack bubble-stack-result bubble-stack-only">
-              <div class="bubble-label bubble-result-label"></div>
-              <div class="bubble-result ${bubbleResultClass}">
-                <div class="bubble-result-scroll" data-autoscroll="bubble-result">${bubbleResultContent}</div>
+            <div class="bubble-workbench ${showBubbleCandidatePane ? "with-candidates" : ""}">
+              <div class="bubble-stack bubble-stack-result bubble-stack-only">
+                <div class="bubble-label bubble-result-label"></div>
+                <div class="bubble-result ${bubbleResultClass}">
+                  <div class="bubble-result-scroll" data-autoscroll="bubble-result">${bubbleResultContent}</div>
+                </div>
               </div>
+              <aside class="bubble-candidate-pane ${showBubbleCandidatePane ? "open" : ""}">
+                <div class="bubble-candidate-list">
+                  ${bubbleCandidateRows || `<div class="bubble-candidate-placeholder">点击顶部按钮生成候选</div>`}
+                  ${bubble.candidate_pending ? `<div class="bubble-candidate-placeholder">候选生成中...</div>` : ""}
+                </div>
+              </aside>
             </div>
           </div>
           <div class="bubble-actions">
@@ -945,6 +1108,64 @@
     }
     applyAutoScroll("main-result");
 
+    const mode = state.config?.translation_mode || "argos";
+    const candidateState = candidateAvailability({
+      mode,
+      sourceText: state.sourceText,
+      pending: state.pending || state.candidatePending,
+      hasResult: Boolean(state.resultText),
+      aiAvailable: state.aiAvailable,
+      aiAvailableChecked: state.aiAvailableChecked,
+    });
+    const candidateButton = document.getElementById("mainCandidateBtn");
+    const candidatePane = document.getElementById("mainCandidatePane");
+    const candidateList = candidatePane?.querySelector(".candidate-list");
+    const showCandidatePane = Boolean(state.candidatePending || (state.candidateItems || []).length);
+    candidatePane?.classList.toggle("open", showCandidatePane);
+    candidatePane?.parentElement?.classList.toggle("with-candidates", showCandidatePane);
+    const displayedMainCandidates = getMainDisplayedCandidates();
+    const mainCopyAll = showCandidatePane && displayedMainCandidates.length > 0;
+
+    if (candidateButton) {
+      const disabled = !candidateState.enabled || state.candidatePending;
+      candidateButton.classList.toggle("disabled", disabled);
+      candidateButton.removeAttribute("title");
+    }
+    const mainModeAiButton = document.querySelector('.seg-btn[data-mode="ai"]');
+    if (mainModeAiButton) {
+      const aiEnabled = Boolean(state.aiAvailable);
+      mainModeAiButton.classList.toggle("disabled", !aiEnabled);
+      if (!aiEnabled) { mainModeAiButton.title = "AI 不可用，请先配置连接"; } else { mainModeAiButton.removeAttribute("title"); }
+    }
+    if (candidateList) {
+      if (displayedMainCandidates.length) {
+        candidateList.innerHTML = displayedMainCandidates.map((item, index) => `
+          <div class="candidate-item">
+            <div class="candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
+            <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="复制此候选">${icons.copy}</button>
+          </div>
+        `).join("");
+        if (state.candidatePending) {
+          candidateList.innerHTML += `<div class="candidate-placeholder">候选生成中...</div>`;
+        }
+      } else {
+        candidateList.innerHTML = state.candidatePending
+          ? `<div class="candidate-placeholder">候选生成中...</div>`
+          : `<div class="candidate-placeholder">点击右上角按钮生成候选</div>`;
+      }
+    }
+    const footerCopy = document.querySelector('.footer-actions [data-action="copy-result"]');
+    if (footerCopy) {
+      const hint = mainCopyAll ? "复制全部候选译文" : "";
+      if (hint) {
+        footerCopy.title = hint;
+        footerCopy.setAttribute("aria-label", hint);
+      } else {
+        footerCopy.removeAttribute("title");
+        footerCopy.setAttribute("aria-label", "复制");
+      }
+    }
+
     const zoomSource = document.getElementById("zoomSource");
     const zoomResult = document.getElementById("zoomResult");
     if (zoomSource) zoomSource.textContent = state.zoomPayload?.sourceText || state.sourceText;
@@ -971,9 +1192,59 @@
     result.classList.toggle("pending-streaming", Boolean(state.bubble.pending && state.bubble.result_text));
     result.classList.toggle("pending-waiting", Boolean(state.bubble.pending && !state.bubble.result_text));
     pin.classList.toggle("active", Boolean(state.bubble.pinned));
-    const activeMode = state.config?.translation_mode || state.ui?.translation_mode || state.bubble.mode || "argos";
+    const activeMode = state.bubble.mode || "argos";
     if (modeArgos) modeArgos.classList.toggle("active", activeMode === "argos");
-    if (modeAi) modeAi.classList.toggle("active", activeMode === "ai");
+    if (modeAi) {
+      const aiEnabled = Boolean(state.aiAvailable);
+      modeAi.classList.toggle("active", activeMode === "ai");
+      modeAi.classList.toggle("disabled", !aiEnabled);
+      modeAi.title = aiEnabled ? "切换到 AI 翻译" : "AI 不可用，请先配置连接";
+    }
+
+    const candidateBtn = document.querySelector('[data-action="generate-candidates-bubble"]');
+    const candidatePane = document.querySelector(".bubble-candidate-pane");
+    const candidateList = document.querySelector(".bubble-candidate-list");
+    const bubbleCandidateState = candidateAvailability({
+      mode: activeMode,
+      sourceText: state.bubble?.source_text || "",
+      pending: Boolean(state.bubble?.pending || state.bubble?.candidate_pending),
+      hasResult: Boolean((state.bubble?.result_text || "").trim()),
+      aiAvailable: state.aiAvailable,
+      aiAvailableChecked: state.aiAvailableChecked,
+    });
+    const bubbleCandidateDisabled = !bubbleCandidateState.enabled || Boolean(state.bubble?.candidate_pending);
+    if (candidateBtn) {
+      candidateBtn.classList.toggle("disabled", bubbleCandidateDisabled);
+      candidateBtn.removeAttribute("title");
+    }
+    const bubbleDisplayedCandidates = getBubbleDisplayedCandidates();
+    const showBubbleCandidatePane = Boolean(
+      state.bubbleCandidatePaneOpen
+      || state.bubble?.candidate_pending
+      || (state.bubble?.candidate_items || []).length
+    );
+    if (showBubbleCandidatePane && !candidatePane) {
+      return false;
+    }
+    candidatePane?.classList.toggle("open", showBubbleCandidatePane);
+    candidatePane?.parentElement?.classList.toggle("with-candidates", showBubbleCandidatePane);
+    if (candidateList) {
+      if (bubbleDisplayedCandidates.length) {
+        candidateList.innerHTML = bubbleDisplayedCandidates.map((item, index) => `
+          <div class="bubble-candidate-item">
+            <div class="bubble-candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
+            <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="复制此候选">${icons.copy}</button>
+          </div>
+        `).join("");
+        if (state.bubble?.candidate_pending) {
+          candidateList.innerHTML += `<div class="bubble-candidate-placeholder">候选生成中...</div>`;
+        }
+      } else {
+        candidateList.innerHTML = state.bubble?.candidate_pending
+          ? `<div class="bubble-candidate-placeholder">候选生成中...</div>`
+          : `<div class="bubble-candidate-placeholder">点击顶部按钮生成候选</div>`;
+      }
+    }
     applyAutoScroll("bubble-result");
     return true;
   }
@@ -1031,32 +1302,73 @@
         rerender();
         break;
       case "set-mode":
-        await apiCall("set_mode", actionTarget.dataset.mode);
+        {
+          const nextMode = String(actionTarget.dataset.mode || "").trim();
+          if (nextMode === "ai" && !state.aiAvailable) {
+            showToast("warning", state.aiAvailableChecked ? "AI 不可用，请先配置连接" : "正在检测 AI 可用性，请稍后");
+            break;
+          }
+          if (nextMode !== "ai") {
+            state.candidatePending = false;
+            state.candidateItems = [];
+            state.candidateReqId = 0;
+            state.bubbleCandidatePaneOpen = false;
+            if (state.bubble) {
+              state.bubble.candidate_pending = false;
+              state.bubble.candidate_items = [];
+            }
+          }
+          const resp = await apiCall("set_mode", nextMode);
+          if (resp && resp.ok === false) {
+            showToast("warning", resp.message || "模式切换失败");
+          }
+        }
         break;
       case "set-mode-bubble": {
         const nextMode = String(actionTarget.dataset.mode || "").trim();
         if (!nextMode || (nextMode !== "argos" && nextMode !== "ai")) {
           break;
         }
+        if (nextMode === "ai" && !state.aiAvailable) {
+          showToast("warning", state.aiAvailableChecked ? "AI 不可用，请先配置连接" : "正在检测 AI 可用性，请稍后");
+          break;
+        }
         const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
         if (currentMode === nextMode) {
           break;
         }
+        const previousBubbleMode = state.bubble?.mode || currentMode || "argos";
         if (state.bubble) {
           state.bubble.mode = nextMode;
           state.bubble.pending = true;
           state.bubble.result_text = "";
+          state.bubble.candidate_pending = false;
+          state.bubble.candidate_items = [];
+        }
+        if (nextMode !== "ai") {
+          state.bubbleCandidatePaneOpen = false;
         }
         if (state.config) {
           state.config.translation_mode = nextMode;
         }
         state.ui.translation_mode = nextMode;
         if (!patchBubbleDynamic()) rerender();
-        await apiCall("set_mode", nextMode);
+        const modeResp = await apiCall("set_mode", nextMode);
+        if (modeResp && modeResp.ok === false) {
+          showToast("warning", modeResp.message || "模式切换失败");
+          if (state.bubble) {
+            state.bubble.mode = previousBubbleMode;
+            state.bubble.pending = false;
+          }
+          if (state.config) state.config.translation_mode = previousBubbleMode;
+          state.ui.translation_mode = previousBubbleMode;
+          if (!patchBubbleDynamic()) rerender();
+          break;
+        }
         const sourceText = String(state.bubble?.source_text || "").trim();
         if (sourceText) {
           scrollFollowState["bubble-result"] = true;
-          await apiCall("translate", sourceText, state.bubble?.action || "划词翻译");
+            await apiCall("translate", sourceText, state.bubble?.action || "划词翻译");
         } else {
           if (state.bubble) {
             state.bubble.pending = false;
@@ -1085,18 +1397,132 @@
         scrollFollowState["main-result"] = true;
         await apiCall("translate", state.sourceText, "翻译");
         break;
+      case "generate-candidates-main": {
+        const availability = candidateAvailability({
+          mode: state.config?.translation_mode || "argos",
+          sourceText: state.sourceText,
+          pending: state.pending || state.candidatePending,
+          hasResult: Boolean(state.resultText),
+          aiAvailable: state.aiAvailable,
+          aiAvailableChecked: state.aiAvailableChecked,
+        });
+        if (!availability.enabled) {
+          showToast("warning", availability.tip || "候选生成功能不可用");
+          break;
+        }
+        if ((state.config?.translation_mode || "argos") !== "ai") {
+          const modeResp = await apiCall("set_mode", "ai");
+          if (modeResp && modeResp.ok === false) {
+            showToast("warning", modeResp.message || "AI 不可用，请先配置连接");
+            break;
+          }
+          if (state.config) state.config.translation_mode = "ai";
+          state.ui.translation_mode = "ai";
+        }
+        if (state.candidatePending) break;
+        state.candidatePending = true;
+        state.candidateItems = [];
+        rerender();
+        const response = await apiCall("generate_multi_candidates", state.sourceText || "", state.resultText || "");
+        if (response && response.ok === false) {
+          state.candidatePending = false;
+          showToast("warning", response.message || "候选生成功能不可用");
+          rerender();
+        }
+        break;
+      }
+      case "generate-candidates-bubble": {
+        state.bubbleCandidatePaneOpen = true;
+        const availability = candidateAvailability({
+          mode: state.bubble?.mode || state.config?.translation_mode || state.ui?.translation_mode || "argos",
+          sourceText: String(state.bubble?.source_text || "").trim(),
+          pending: Boolean(state.bubble?.pending || state.bubble?.candidate_pending),
+          hasResult: Boolean((state.bubble?.result_text || "").trim()),
+          aiAvailable: state.aiAvailable,
+          aiAvailableChecked: state.aiAvailableChecked,
+        });
+        if (!availability.enabled) {
+          showToast("warning", availability.tip || "候选生成功能不可用");
+          break;
+        }
+        if ((state.config?.translation_mode || state.ui?.translation_mode || "argos") !== "ai") {
+          const modeResp = await apiCall("set_mode", "ai");
+          if (modeResp && modeResp.ok === false) {
+            showToast("warning", modeResp.message || "AI 不可用，请先配置连接");
+            if (state.bubble) {
+              state.bubble.candidate_pending = false;
+            }
+            if (!patchBubbleDynamic()) rerender();
+            break;
+          }
+          if (state.config) state.config.translation_mode = "ai";
+          state.ui.translation_mode = "ai";
+          if (state.bubble) state.bubble.mode = "ai";
+        }
+        if (state.bubble) {
+          state.bubble.candidate_pending = true;
+          state.bubble.candidate_items = [];
+        }
+        if (!patchBubbleDynamic()) rerender();
+        const sourceText = String(state.bubble?.source_text || "").trim();
+        const response = await apiCall("generate_multi_candidates", sourceText, state.bubble?.result_text || "");
+        if (response && response.ok === false) {
+          if (state.bubble) {
+            state.bubble.candidate_pending = false;
+          }
+          showToast("warning", response.message || "候选生成功能不可用");
+          if (!patchBubbleDynamic()) rerender();
+        }
+        break;
+      }
+      case "copy-candidate-main": {
+        const index = Number(actionTarget.dataset.index || "-1");
+        const items = getMainDisplayedCandidates();
+        if (index < 0 || index >= items.length) break;
+        await apiCall("copy_text", items[index] || "");
+        break;
+      }
+      case "copy-candidate-bubble": {
+        const index = Number(actionTarget.dataset.index || "-1");
+        const items = getBubbleDisplayedCandidates();
+        if (index < 0 || index >= items.length) break;
+        await apiCall("copy_text", items[index] || "");
+        break;
+      }
       case "copy-result":
-        await apiCall("copy_text", state.view === "bubble" ? state.bubble?.result_text || "" : state.resultText);
+        if (state.view === "bubble") {
+          const bubbleItems = getBubbleDisplayedCandidates();
+          const bubbleCandidateOpen = Boolean(state.bubble?.candidate_pending || (state.bubble?.candidate_items || []).length);
+          if (bubbleCandidateOpen && bubbleItems.length > 0) {
+            await apiCall("copy_text", formatAllCandidates(bubbleItems));
+          } else {
+            await apiCall("copy_text", state.bubble?.result_text || "");
+          }
+        } else {
+          const mainItems = getMainDisplayedCandidates();
+          const mainCandidateOpen = Boolean(state.candidatePending || (state.candidateItems || []).length);
+          if (mainCandidateOpen && mainItems.length > 0) {
+            await apiCall("copy_text", formatAllCandidates(mainItems));
+          } else {
+            await apiCall("copy_text", state.resultText);
+          }
+        }
         break;
       case "clear-all":
         state.mainReqId = 0;
         state.sourceText = "";
         state.resultText = "";
+        state.candidatePending = false;
+        state.candidateItems = [];
+        state.candidateReqId = 0;
         state.pending = false;
         rerender();
         void apiCall("cancel_translation");
         break;
       case "close-app":
+        if (state.view === "bubble") {
+          state.bubbleCandidatePaneOpen = false;
+        }
         await apiCall("close_window");
         break;
       case "test-ai":
@@ -1203,6 +1629,7 @@
 
     if (event.target.id === "sourceText") {
       state.sourceText = event.target.value;
+      patchMainDynamic();
       return;
     }
     const field = event.target.dataset.field;
@@ -1220,7 +1647,11 @@
     if (field.startsWith("openai.")) {
       state.aiTestState = "idle";
     }
-    if (field === "interaction.selection_enabled" || field === "interaction.selection_trigger_mode") {
+    if (
+      field === "interaction.selection_enabled"
+      || field === "interaction.selection_trigger_mode"
+      || field === "interaction.screenshot_enabled"
+    ) {
       rerender();
     }
   }
@@ -1236,6 +1667,16 @@
         if (payload.config) state.config = payload.config;
         if (payload.ui) state.ui = payload.ui;
         if (payload.settings) state.settings = payload.settings;
+        if (payload.aiAvailability) {
+          state.aiAvailable = Boolean(payload.aiAvailability.available);
+          state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
+          state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
+        }
+        if (state.config?.translation_mode !== "ai") {
+          state.candidatePending = false;
+          state.candidateItems = [];
+          state.candidateReqId = 0;
+        }
         state.settingsDraft = clone(state.config || {});
         setTheme(payload.themeMode || payload.settings?.effectiveTheme || "light");
         break;
@@ -1243,6 +1684,9 @@
         state.mainReqId = Number(payload.reqId || 0);
         state.sourceText = payload.sourceText || state.sourceText;
         state.resultText = "";
+        state.candidatePending = false;
+        state.candidateItems = [];
+        state.candidateReqId = 0;
         state.pending = true;
         scrollFollowState["main-result"] = true;
         scrollFollowState["bubble-result"] = true;
@@ -1293,6 +1737,9 @@
         state.pending = false;
         state.mainReqId = 0;
         state.resultText = payload.resultText ? `${payload.resultText}\n\n${payload.message}` : payload.message || "";
+        state.candidatePending = false;
+        state.candidateItems = [];
+        state.candidateReqId = 0;
         if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.resultText = state.resultText;
         }
@@ -1304,9 +1751,33 @@
         }
         state.pending = false;
         state.mainReqId = 0;
+        state.candidatePending = false;
+        state.candidateReqId = 0;
         if (typeof payload.resultText === "string") {
           state.resultText = payload.resultText;
         }
+        if (patchMainDynamic()) return;
+        break;
+      case "multi-candidates-start":
+        state.candidateReqId = Number(payload.reqId || 0);
+        state.candidatePending = true;
+        state.candidateItems = [];
+        if (patchMainDynamic()) return;
+        break;
+      case "multi-candidates-done":
+        if (state.candidateReqId && Number(payload.reqId || 0) !== state.candidateReqId) {
+          break;
+        }
+        state.candidatePending = false;
+        state.candidateItems = Array.isArray(payload.candidates) ? payload.candidates.map((x) => String(x || "").trim()).filter(Boolean) : [];
+        if (patchMainDynamic()) return;
+        break;
+      case "multi-candidates-error":
+        if (state.candidateReqId && Number(payload.reqId || 0) !== state.candidateReqId) {
+          break;
+        }
+        state.candidatePending = false;
+        showToast("error", payload.message || "候选生成失败");
         if (patchMainDynamic()) return;
         break;
       case "history-updated":
@@ -1318,7 +1789,20 @@
       case "ai-test-result":
         state.testingAi = false;
         state.aiTestState = payload.ok ? "success" : "error";
+        state.aiAvailable = Boolean(payload.ok);
+        state.aiAvailableChecked = true;
+        state.aiAvailabilityMessage = String(payload.message || "");
         showToast(payload.ok ? "success" : "error", payload.message || "");
+        break;
+      case "ai-availability":
+        state.aiAvailable = Boolean(payload.available);
+        state.aiAvailableChecked = Boolean(payload.checked);
+        state.aiAvailabilityMessage = String(payload.message || "");
+        if (payload.checked && !payload.available && state.config?.translation_mode === "ai") {
+          state.notice = { type: "warning", text: "AI 当前不可用，请检查连接配置" };
+        }
+        if (state.view === "main" && patchMainDynamic()) return;
+        if (state.view === "bubble" && patchBubbleDynamic()) return;
         break;
       case "offline-models-updated":
         if (payload.config) state.config = payload.config;
@@ -1340,7 +1824,21 @@
         }
         break;
       case "bubble-updated":
-        state.bubble = payload.bubble || state.bubble;
+        {
+          const prevSource = String(state.bubble?.source_text || "");
+          const nextBubble = payload.bubble || state.bubble;
+          state.bubble = nextBubble;
+          if (nextBubble) {
+            const hasCandidateData = Boolean(nextBubble.candidate_pending || (nextBubble.candidate_items || []).length);
+            if (hasCandidateData) {
+              state.bubbleCandidatePaneOpen = true;
+            } else if ((nextBubble.mode || "argos") !== "ai") {
+              state.bubbleCandidatePaneOpen = false;
+            } else if (String(nextBubble.source_text || "") !== prevSource) {
+              state.bubbleCandidatePaneOpen = false;
+            }
+          }
+        }
         if (payload.themeMode) setTheme(payload.themeMode);
         if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble" && payload.bubble) {
           state.zoomPayload.sourceText = payload.bubble.source_text || state.zoomPayload.sourceText || "";
@@ -1356,8 +1854,11 @@
         if (state.bubble?.pending && !(state.bubble.result_text || "")) {
           scrollFollowState["bubble-result"] = true;
         }
-        if (patchBubbleDynamic()) return;
-        shouldRerender = false;
+        if (state.view === "bubble") {
+          if (patchBubbleDynamic()) return;
+        } else {
+          shouldRerender = false;
+        }
         break;
       case "bubble-translation-chunk":
         if (state.zoomOpen && state.zoomPayload && state.zoomPayload.origin === "bubble") {
@@ -1502,3 +2003,9 @@
     void bootstrap();
   }
 })();
+
+
+
+
+
+

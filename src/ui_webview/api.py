@@ -41,6 +41,9 @@ class WindowApi:
     def copy_text(self, text: str) -> dict[str, Any]:
         return self._controller.copy_text(text)
 
+    def generate_multi_candidates(self, text: str = "", result_text: str = "") -> dict[str, Any]:
+        return self._controller.generate_multi_candidates_from_window(self.kind, text, result_text)
+
     def clear_history(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._controller.clear_history(payload or {})
 
