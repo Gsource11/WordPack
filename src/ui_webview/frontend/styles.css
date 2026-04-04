@@ -1731,7 +1731,7 @@ body.view-bubble .bubble-card {
    * bubble window corners show color halo if outer border differs from window/body background.
    * Keep these three layers identical: window background, body/#app background, bubble-card outer border.
    */
-  border: 1px solid #c4c6ca;
+  border: 0 solid transparent;
   border-radius: 18px;
   background: #c4c6ca;
   backdrop-filter: none;
@@ -1815,6 +1815,11 @@ body.view-bubble .bubble-card {
 .mode-chip.disabled {
   opacity: 0.52;
   cursor: not-allowed;
+}
+
+.mode-chip.active.disabled {
+  opacity: 1;
+  color: var(--accent-text);
 }
 
 .mode-chip .icon {
@@ -2252,9 +2257,10 @@ body[data-theme="dark"].view-bubble #app {
 }
 
 body[data-theme="dark"].view-bubble .bubble-card {
-  border-color: #ffffff26;
+  border-width: 0;
+  border-color: transparent;
   background: #14171c;
-  box-shadow: 0 18px 32px #00000042;
+  box-shadow: none;
 }
 
 body[data-theme="dark"].view-bubble .bubble-title-text {
