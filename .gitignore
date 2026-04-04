@@ -8,6 +8,8 @@ build/
 *.spec
 .venv/
 .venv-release/
+tools/
+scripts/innosetup-*.exe
 .pytest_cache/
 .mypy_cache/
 .idea/

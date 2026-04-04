@@ -1534,6 +1534,13 @@ body.view-main .choice-chip.active {
   transform: translateY(1px);
 }
 
+.ai-status-inline {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .notice {
   padding: 12px;
   border-radius: var(--radius-sm);

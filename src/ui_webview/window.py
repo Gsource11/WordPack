@@ -2,6 +2,7 @@
 
 import ctypes
 import re
+import sys
 import threading
 import time
 from ctypes import wintypes
@@ -51,8 +52,15 @@ class WordPackWebviewApp:
     AI_PROBE_INTERVAL_SEC = 180
 
     def __init__(self) -> None:
-        self.base_dir = Path(__file__).resolve().parent.parent.parent
-        self.data_dir = self.base_dir / "data"
+        if getattr(sys, "frozen", False):
+            bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+            exe_dir = Path(sys.executable).resolve().parent
+            project_data_dir = exe_dir.parent / "data"
+            self.base_dir = bundle_root
+            self.data_dir = project_data_dir if project_data_dir.exists() else (exe_dir / "data")
+        else:
+            self.base_dir = Path(__file__).resolve().parent.parent.parent
+            self.data_dir = self.base_dir / "data"
         self.logger = get_logger(__name__)
         self.lock = threading.RLock()
 
@@ -106,6 +114,7 @@ class WordPackWebviewApp:
         self._ai_available_checked = False
         self._ai_probe_inflight = False
         self._ai_availability_message = ""
+        self._ai_availability_checked_at = 0.0
         self._ai_probe_thread: threading.Thread | None = None
         self._bubble_state = BubbleState(mode=self.config.translation_mode)
         self._selection_candidate = SelectionCandidate()
@@ -458,6 +467,7 @@ class WordPackWebviewApp:
                 "available": bool(self._ai_available),
                 "checked": bool(self._ai_available_checked),
                 "message": str(self._ai_availability_message or ""),
+                "checkedAt": float(self._ai_availability_checked_at or 0.0),
             }
 
     def _emit_ai_availability(self) -> None:
@@ -478,6 +488,7 @@ class WordPackWebviewApp:
                     self._ai_available = bool(ok)
                     self._ai_available_checked = True
                     self._ai_availability_message = str(message or "")
+                    self._ai_availability_checked_at = time.time()
             finally:
                 with self.lock:
                     self._ai_probe_inflight = False
@@ -1435,8 +1446,17 @@ class WordPackWebviewApp:
                 self._ai_available = bool(ok)
                 self._ai_available_checked = True
                 self._ai_availability_message = str(message or "")
+                self._ai_availability_checked_at = time.time()
             self.set_status(message)
-            self.bridge.send("main", "ai-test-result", {"ok": ok, "message": message})
+            self.bridge.send(
+                "main",
+                "ai-test-result",
+                {
+                    "ok": ok,
+                    "message": message,
+                    "checkedAt": float(self._ai_availability_checked_at or time.time()),
+                },
+            )
             self._emit_ai_availability()
 
         threading.Thread(target=worker, daemon=True).start()

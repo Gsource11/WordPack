@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
-
-import tkinter as tk
+from typing import Any, Callable, TYPE_CHECKING
 from ctypes import windll
+
+if TYPE_CHECKING:
+    import tkinter as tk
 
 
 SM_XVIRTUALSCREEN = 76
@@ -65,7 +66,7 @@ def capture_screen_region(region: ScreenRegion):
 class ScreenCaptureOverlay:
     def __init__(
         self,
-        root: tk.Tk,
+        root: Any,
         on_capture: Callable[[ScreenRegion], None],
         on_cancel: Callable[[], None],
     ) -> None:
@@ -73,13 +74,17 @@ class ScreenCaptureOverlay:
         self.on_capture = on_capture
         self.on_cancel = on_cancel
         self.bounds = get_virtual_screen_region()
-        self.window: tk.Toplevel | None = None
-        self.canvas: tk.Canvas | None = None
+        self.window = None
+        self.canvas = None
         self._drag_start: tuple[int, int] | None = None
         self._drag_current: tuple[int, int] | None = None
         self._closed = False
 
     def start(self) -> None:
+        try:
+            import tkinter as tk  # lazy import to avoid hard runtime dependency
+        except Exception as exc:
+            raise RuntimeError("当前环境不可用 tkinter，无法启用旧版截图覆盖层") from exc
         if self.window is not None and self.window.winfo_exists():
             return
 

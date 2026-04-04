@@ -37,6 +37,7 @@
     aiAvailable: false,
     aiAvailableChecked: false,
     aiAvailabilityMessage: "",
+    aiAvailabilityCheckedAt: 0,
     notice: null,
     toast: null,
     shortcuts: [],
@@ -154,6 +155,14 @@
   };
 
   const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : "词典");
+  const formatDateTime = (timestampSec) => {
+    const ms = Number(timestampSec || 0) * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) return "未检测";
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return "未检测";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
 
   const candidateThresholds = () => ({
     cn: Number(state.config?.openai?.multi_candidate_short_cn_max_chars || 24),
@@ -184,7 +193,7 @@
     if (!canUseAi) {
       return {
         enabled: false,
-        tip: aiAvailableChecked ? "需要先配置并连接 AI 模式" : "正在检测 AI 可用性，请稍后",
+        tip: "AI 不可用，请先配置连接",
       };
     }
     if (!String(sourceText || "").trim()) {
@@ -525,6 +534,7 @@
       state.aiAvailable = Boolean(payload.aiAvailability.available);
       state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
       state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
+      state.aiAvailabilityCheckedAt = Number(payload.aiAvailability.checkedAt || 0);
     }
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
@@ -554,9 +564,11 @@
   }
 
   function rerender() {
+    const focusState = captureFocusState();
     const scrollPositions = captureScrollPositions();
     render();
     restoreScrollPositions(scrollPositions);
+    restoreFocusState(focusState);
     installDragHandles();
     syncMainCompact();
     window.requestAnimationFrame(() => {
@@ -761,6 +773,8 @@
       label: value === "all" ? "全部方向" : value,
     }));
     const aiTestIcon = state.testingAi ? icons.link : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.link);
+    const aiStatusText = state.aiAvailableChecked ? (state.aiAvailable ? "可用" : "不可用") : "检测中";
+    const aiStatusTime = formatDateTime(state.aiAvailabilityCheckedAt);
     const notice = state.notice
       ? `<div class="notice ${escapeHtml(state.notice.type || "")}">${escapeHtml(state.notice.text || "")}</div>`
       : "";
@@ -952,14 +966,15 @@
             </section>
             <section class="setting-group">
               <div class="setting-title">AI 配置</div>
-              <div class="field"><label>Base URL</label><input data-field="openai.base_url" value="${escapeHtml(draft.openai?.base_url || "")}" /></div>
-              <div class="field"><label>API Key</label><input type="password" autocomplete="off" data-field="openai.api_key" value="${escapeHtml(draft.openai?.api_key || "")}" /></div>
-              <div class="field"><label>Model</label><input data-field="openai.model" value="${escapeHtml(draft.openai?.model || "")}" /></div>
-              <div class="field"><label>Timeout(s)</label><input type="number" min="5" step="1" data-field="openai.timeout_sec" value="${escapeHtml(draft.openai?.timeout_sec ?? 60)}" /></div>
+              <div class="field"><label>Base URL</label><input spellcheck="false" data-field="openai.base_url" value="${escapeHtml(draft.openai?.base_url || "")}" /></div>
+              <div class="field"><label>API Key</label><input type="password" autocomplete="off" spellcheck="false" data-field="openai.api_key" value="${escapeHtml(draft.openai?.api_key || "")}" /></div>
+              <div class="field"><label>Model</label><input spellcheck="false" data-field="openai.model" value="${escapeHtml(draft.openai?.model || "")}" /></div>
+              <div class="field"><label>Timeout(s)</label><input type="number" min="5" step="1" spellcheck="false" data-field="openai.timeout_sec" value="${escapeHtml(draft.openai?.timeout_sec ?? 60)}" /></div>
               <div class="settings-actions">
                 <button class="ghost-button" data-action="ollama-defaults">${icons.robot}<span>Ollama 默认</span></button>
                 <button class="ghost-button ai-test-button ${state.testingAi ? "testing" : ""} ${state.aiTestState}" data-action="test-ai" ${state.testingAi ? "disabled" : ""}>${aiTestIcon}<span>${state.testingAi ? "测试中..." : "测试连接"}</span></button>
               </div>
+              <div class="ai-status-inline">AI 状态：${escapeHtml(aiStatusText)} · 最近检测：${escapeHtml(aiStatusTime)}</div>
             </section>
             <section class="setting-group">
               <div class="setting-title">Argos 模型</div>
@@ -1097,7 +1112,7 @@
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
               <button class="mode-chip ${mode === "argos" ? "active" : ""}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译">${icons.book}</button>
-              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" title="${bubbleModeAiEnabled ? "切换到 AI 翻译" : "AI 不可用，请先配置连接"}">${icons.robot}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译">${icons.robot}</button>
             </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
           </header>
@@ -1176,7 +1191,7 @@
     if (mainModeAiButton) {
       const aiEnabled = Boolean(state.aiAvailable);
       mainModeAiButton.classList.toggle("disabled", !aiEnabled);
-      if (!aiEnabled) { mainModeAiButton.title = "AI 不可用，请先配置连接"; } else { mainModeAiButton.removeAttribute("title"); }
+      mainModeAiButton.removeAttribute("title");
     }
     if (candidateList) {
       if (displayedMainCandidates.length) {
@@ -1239,7 +1254,7 @@
       const aiEnabled = Boolean(state.aiAvailable);
       modeAi.classList.toggle("active", activeMode === "ai");
       modeAi.classList.toggle("disabled", !aiEnabled);
-      modeAi.title = aiEnabled ? "切换到 AI 翻译" : "AI 不可用，请先配置连接";
+      modeAi.removeAttribute("title");
     }
 
     const candidateBtn = document.querySelector('[data-action="generate-candidates-bubble"]');
@@ -1288,6 +1303,47 @@
     }
     applyAutoScroll("bubble-result");
     return true;
+  }
+
+  function captureFocusState() {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) {
+      return null;
+    }
+    let selector = "";
+    if (active.id) {
+      selector = `#${active.id}`;
+    } else if (active.dataset?.field) {
+      selector = `[data-field="${active.dataset.field}"]`;
+    } else if (active.dataset?.shortcutField) {
+      selector = `[data-shortcut-field="${active.dataset.shortcutField}"]`;
+    } else if (active.dataset?.historyField) {
+      selector = `[data-history-field="${active.dataset.historyField}"]`;
+    } else {
+      return null;
+    }
+    const canSelection = active instanceof HTMLTextAreaElement
+      || (active instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "file"].includes(active.type));
+    return {
+      selector,
+      selectionStart: canSelection ? active.selectionStart : null,
+      selectionEnd: canSelection ? active.selectionEnd : null,
+    };
+  }
+
+  function restoreFocusState(focusState) {
+    if (!focusState || !focusState.selector) return;
+    const node = document.querySelector(focusState.selector);
+    if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    node.focus();
+    if (focusState.selectionStart == null || focusState.selectionEnd == null) return;
+    try {
+      node.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
+    } catch (_) {
+      // number/password-like inputs may not support selection range in all engines.
+    }
   }
 
   async function handleClick(event) {
@@ -1345,8 +1401,12 @@
       case "set-mode":
         {
           const nextMode = String(actionTarget.dataset.mode || "").trim();
+          const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
+          if (!nextMode || currentMode === nextMode) {
+            break;
+          }
           if (nextMode === "ai" && !state.aiAvailable) {
-            showToast("warning", state.aiAvailableChecked ? "AI 不可用，请先配置连接" : "正在检测 AI 可用性，请稍后");
+            showToast("warning", "AI 不可用，请先配置连接");
             break;
           }
           if (nextMode !== "ai") {
@@ -1370,12 +1430,12 @@
         if (!nextMode || (nextMode !== "argos" && nextMode !== "ai")) {
           break;
         }
-        if (nextMode === "ai" && !state.aiAvailable) {
-          showToast("warning", state.aiAvailableChecked ? "AI 不可用，请先配置连接" : "正在检测 AI 可用性，请稍后");
-          break;
-        }
         const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
         if (currentMode === nextMode) {
+          break;
+        }
+        if (nextMode === "ai" && !state.aiAvailable) {
+          showToast("warning", "AI 不可用，请先配置连接");
           break;
         }
         const previousBubbleMode = state.bubble?.mode || currentMode || "argos";
@@ -1712,6 +1772,7 @@
           state.aiAvailable = Boolean(payload.aiAvailability.available);
           state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
           state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
+          state.aiAvailabilityCheckedAt = Number(payload.aiAvailability.checkedAt || 0);
         }
         if (state.config?.translation_mode !== "ai") {
           state.candidatePending = false;
@@ -1833,12 +1894,14 @@
         state.aiAvailable = Boolean(payload.ok);
         state.aiAvailableChecked = true;
         state.aiAvailabilityMessage = String(payload.message || "");
+        state.aiAvailabilityCheckedAt = Number(payload.checkedAt || Math.floor(Date.now() / 1000));
         showToast(payload.ok ? "success" : "error", payload.message || "");
         break;
       case "ai-availability":
         state.aiAvailable = Boolean(payload.available);
         state.aiAvailableChecked = Boolean(payload.checked);
         state.aiAvailabilityMessage = String(payload.message || "");
+        state.aiAvailabilityCheckedAt = Number(payload.checkedAt || state.aiAvailabilityCheckedAt || 0);
         if (payload.checked && !payload.available && state.config?.translation_mode === "ai") {
           state.notice = { type: "warning", text: "AI 当前不可用，请检查连接配置" };
         }
