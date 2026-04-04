@@ -351,8 +351,12 @@ class WordPackWebviewApp:
                 if native is None:
                     return
 
-                from System import Action
-                from System.Drawing import Icon
+                try:
+                    from System import Action  # type: ignore[import-not-found]
+                    from System.Drawing import Icon  # type: ignore[import-not-found]
+                except ImportError:
+                    # pythonnet/.NET runtime unavailable in current interpreter (e.g. static analysis env).
+                    return
 
                 icon = Icon(icon_path)
 

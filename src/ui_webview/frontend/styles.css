@@ -92,7 +92,7 @@ body {
 
 body.view-main {
   overflow: hidden;
-  background: #bfc4cb;
+  background: #c4c6ca;
   background-image: none;
 }
 
@@ -120,6 +120,10 @@ body.view-overlay #app {
 }
 
 body.view-bubble #app {
+  background: #c4c6ca !important;
+}
+
+body.view-main #app {
   background: #c4c6ca !important;
 }
 
@@ -207,9 +211,13 @@ input[type="checkbox"] {
 }
 
 body.view-main .window-card {
+  /*
+   * Keep these layers consistent to avoid corner seam/halo:
+   * native window background, body/#app background, and window-card outer border.
+   */
   gap: 10px;
   padding: 10px;
-  border: 1px solid #d6dce6;
+  border: 1px solid #c4c6ca;
   border-radius: 20px;
   background: #c2c7ce;
   backdrop-filter: none;
@@ -660,25 +668,30 @@ body.view-main .result-card {
   gap: 8px;
   min-height: 0;
   flex: 1 1 auto;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .result-workbench .result-pane {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .result-workbench.with-candidates .result-pane {
-  flex: 0 0 42%;
+  flex: 0 0 calc((100% - 8px) * 0.42);
 }
 
 .candidate-pane {
   display: none;
-  flex: 0 0 58%;
+  flex: 0 0 calc((100% - 8px) * 0.58);
   min-width: 220px;
   border-radius: 18px;
   border: 1px solid #bdc7d4;
   background: #e5eaf1;
   padding: 8px;
   min-height: 0;
+  box-sizing: border-box;
+  background-clip: padding-box;
 }
 
 .candidate-pane.open {
@@ -706,6 +719,7 @@ body.view-main .result-card {
   margin-top: 0;
   overflow: auto;
   padding-right: 2px;
+  box-sizing: border-box;
 }
 
 .candidate-item {
@@ -1725,18 +1739,20 @@ body.view-bubble .bubble-toolbar .icon-button {
   gap: 8px;
   min-height: 0;
   flex: 1 1 auto;
+  padding: 0;
+  box-sizing: border-box;
   overflow: visible;
 }
 
 .bubble-workbench.with-candidates .bubble-stack-result {
-  flex: 0 0 40%;
+  flex: 0 0 calc((100% - 8px) * 0.4);
 }
 
 .bubble-candidate-pane {
   display: none;
-  flex: 0 0 60%;
+  flex: 0 0 calc((100% - 8px) * 0.6);
   min-width: 210px;
-  padding: 0 1px 0 0;
+  padding: 0;
   min-height: 0;
   box-sizing: border-box;
   overflow: visible;
@@ -1755,6 +1771,7 @@ body.view-bubble .bubble-toolbar .icon-button {
 .bubble-stack-result {
   min-height: 0;
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .bubble-stack-only {
