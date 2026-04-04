@@ -43,6 +43,7 @@ from src.ui_webview.state import BubbleState, ScreenshotSession, SelectionCandid
 class WordPackWebviewApp:
     MAIN_WINDOW_BG = "#c4c6ca"
     BUBBLE_WINDOW_BG = "#c4c6ca"
+    DARK_WINDOW_BG = "#1b2028"
     MAIN_WIDTH = 468
     MAIN_HEIGHT = 680
     MAIN_MIN_HEIGHT = 360
@@ -306,7 +307,16 @@ class WordPackWebviewApp:
     def _frontend_url(self, view_name: str) -> str:
         base = (self.frontend_dir / "index.html").resolve().as_posix()
         rev = int(time.time())
-        return f"{base}?view={view_name}&rev={rev}"
+        theme = self._resolved_theme_mode()
+        return f"{base}?view={view_name}&rev={rev}&theme={theme}"
+
+    def _window_background_color(self, kind: str) -> str:
+        theme = self._resolved_theme_mode()
+        if kind in {"main", "bubble"}:
+            return self.DARK_WINDOW_BG if theme == "dark" else self.MAIN_WINDOW_BG
+        if kind in {"icon", "overlay"}:
+            return "#000000"
+        return "#eef1ec"
 
     def _centered_position(self, width: int, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()
@@ -435,13 +445,7 @@ class WordPackWebviewApp:
             # IMPORTANT:
             # icon/overlay windows must keep native background fully transparent,
             # otherwise a gray/black rectangular plate appears behind the floating icon.
-            "background_color": (
-                self.MAIN_WINDOW_BG if kind == "main"
-                else (
-                    self.BUBBLE_WINDOW_BG if kind == "bubble"
-                    else ("#000000" if kind in {"icon", "overlay"} else "#eef1ec")
-                )
-            ),
+            "background_color": self._window_background_color(kind),
             "transparent": transparent,
         }
         if min_size is not None:

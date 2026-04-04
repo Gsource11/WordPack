@@ -353,19 +353,38 @@
     }, 220);
   }
 
-  function syncMainCompact() {
+  function flushMainCompactRequest() {
     if (state.view !== "main") return;
-    const desired = desiredMainCompact();
-    const compactKey = desired ? "true" : "false";
-    if (mainWindowCompact === compactKey) return;
-    mainWindowCompact = compactKey;
+    if (!mainWindowCompactTarget || mainWindowCompactInFlight) return;
+    if (mainWindowCompactTarget === mainWindowCompactApplied) return;
+
+    const requestKey = mainWindowCompactTarget;
+    const desired = requestKey === "true";
+    const reqId = ++mainWindowCompactReqId;
+    mainWindowCompactInFlight = true;
+
     void apiCall("set_main_compact", desired)
       .then((payload) => {
+        if (reqId !== mainWindowCompactReqId) return;
+        mainWindowCompactApplied = requestKey;
         if (!desired && (payload?.ok ?? true)) {
           playMainContentExpand();
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (reqId !== mainWindowCompactReqId) return;
+        mainWindowCompactInFlight = false;
+        if (mainWindowCompactTarget !== mainWindowCompactApplied) {
+          window.requestAnimationFrame(flushMainCompactRequest);
+        }
+      });
+  }
+
+  function syncMainCompact() {
+    if (state.view !== "main") return;
+    mainWindowCompactTarget = desiredMainCompact() ? "true" : "false";
+    flushMainCompactRequest();
   }
 
   function clearSideSheetOpenTimer() {
@@ -379,9 +398,9 @@
     forceMainExpandedUntil = Date.now() + 320;
     state.historyOpen = kind === "history";
     state.settingsOpen = kind === "settings";
-    mainWindowCompact = "false";
+    mainWindowCompactTarget = "false";
     rerender();
-    void apiCall("set_main_compact", false);
+    flushMainCompactRequest();
     return new Promise((resolve) => {
       resolve();
     });
@@ -462,7 +481,10 @@
   }
 
   let toastTimer = 0;
-  let mainWindowCompact = "";
+  let mainWindowCompactApplied = "";
+  let mainWindowCompactTarget = "";
+  let mainWindowCompactInFlight = false;
+  let mainWindowCompactReqId = 0;
   let historyFilterTimer = 0;
   let settingsSaveTimer = 0;
   let settingsSaveInFlight = false;

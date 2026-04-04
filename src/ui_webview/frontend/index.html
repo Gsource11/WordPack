@@ -11,6 +11,10 @@
         min-height: 100%;
         background: #c4c6ca;
       }
+      html.preload-dark,
+      html.preload-dark body {
+        background: #1b2028 !important;
+      }
       html.preload-transparent,
       html.preload-transparent body {
         background: transparent !important;
@@ -20,12 +24,17 @@
       (function () {
         var params = new URLSearchParams(window.location.search);
         var view = params.get("view") || "main";
+        var theme = params.get("theme") || "light";
         var rev = params.get("rev") || String(Date.now());
         document.documentElement.dataset.view = view;
+        if (theme === "dark" && view === "main") {
+          document.documentElement.classList.add("preload-dark");
+        }
         if (view === "icon" || view === "bubble" || view === "overlay") {
           document.documentElement.classList.add("preload-transparent");
         }
         window.__WORDPACK_PRELOAD_VIEW__ = view;
+        window.__WORDPACK_PRELOAD_THEME__ = theme === "dark" ? "dark" : "light";
         window.__WORDPACK_ASSET_REV__ = rev;
       })();
     </script>
@@ -40,6 +49,12 @@
     </script>
   </head>
   <body data-theme="light">
+    <script>
+      (function () {
+        var theme = window.__WORDPACK_PRELOAD_THEME__ || "light";
+        document.body.setAttribute("data-theme", theme);
+      })();
+    </script>
     <div id="app"></div>
     <script>
       (function () {
