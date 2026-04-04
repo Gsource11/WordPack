@@ -1622,6 +1622,39 @@ body.view-main .choice-chip.active {
   color: var(--danger-text);
 }
 
+.app-tooltip {
+  position: fixed;
+  z-index: 1200;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke-soft);
+  background: var(--panel-strong);
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(14px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.app-tooltip.open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+body[data-theme="dark"] .app-tooltip {
+  border-color: #ffffff26;
+  background: #1b2028d8;
+  color: #f3f6fa;
+  box-shadow: 0 10px 22px #0000005a;
+}
+
 .zoom-shell {
   flex: 1 1 auto;
   min-height: 0;

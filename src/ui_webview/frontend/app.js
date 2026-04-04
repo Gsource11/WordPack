@@ -129,6 +129,8 @@
     "zoom-shell": true,
   };
   const scrollTailTolerance = 18;
+  let tooltipEl = null;
+  let tooltipTarget = null;
 
   const choiceGroupMarkup = (field, currentValue, options) => `
     <div class="choice-group">
@@ -216,13 +218,19 @@
 
   function argosAvailability() {
     const settings = state.settings || {};
-    const offlineModels = Array.isArray(settings.offlineModels) ? settings.offlineModels : [];
+    const hasRuntimeFlag = typeof settings.offlineRuntimeReady === "boolean";
+    const hasModelsFlag = Array.isArray(settings.offlineModels);
+    // Bubble view may bootstrap without settings payload; avoid false-negative disable.
+    if (!hasRuntimeFlag && !hasModelsFlag) {
+      return { available: true, tip: "" };
+    }
+    const offlineModels = hasModelsFlag ? settings.offlineModels : [];
     const hasOfflineModels = offlineModels.length > 0;
     const runtimeReady = Boolean(settings.offlineRuntimeReady);
     const available = runtimeReady && hasOfflineModels;
     return {
       available,
-      tip: available ? "" : "请先配置词典翻译",
+      tip: available ? "" : "模式不可用，请检查配置",
     };
   }
 
@@ -230,7 +238,7 @@
     const available = Boolean(state.aiAvailable);
     return {
       available,
-      tip: available ? "" : "请先配置AI翻译",
+      tip: available ? "" : "模式不可用，请检查配置",
     };
   }
 
@@ -370,6 +378,104 @@
       && !state.pending
       && !state.resultText
     );
+  }
+
+  function ensureTooltipElement() {
+    if (tooltipEl && document.body.contains(tooltipEl)) {
+      return tooltipEl;
+    }
+    tooltipEl = document.createElement("div");
+    tooltipEl.className = "app-tooltip";
+    tooltipEl.setAttribute("role", "tooltip");
+    tooltipEl.setAttribute("aria-hidden", "true");
+    document.body.appendChild(tooltipEl);
+    return tooltipEl;
+  }
+
+  function positionTooltip() {
+    if (!tooltipEl || !tooltipTarget || !document.body.contains(tooltipTarget)) return;
+    const rect = tooltipTarget.getBoundingClientRect();
+    const gap = 8;
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    const maxWidth = Math.min(320, Math.max(160, vw - 24));
+    tooltipEl.style.maxWidth = `${maxWidth}px`;
+    tooltipEl.style.left = "-9999px";
+    tooltipEl.style.top = "-9999px";
+    tooltipEl.classList.add("open");
+    const tipRect = tooltipEl.getBoundingClientRect();
+    let left = rect.left + (rect.width - tipRect.width) / 2;
+    left = Math.max(8, Math.min(left, vw - tipRect.width - 8));
+    let top = rect.top - tipRect.height - gap;
+    if (top < 8) {
+      top = Math.min(vh - tipRect.height - 8, rect.bottom + gap);
+    }
+    tooltipEl.style.left = `${Math.round(left)}px`;
+    tooltipEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function hideTooltip() {
+    if (!tooltipEl) return;
+    tooltipTarget = null;
+    tooltipEl.classList.remove("open");
+    tooltipEl.setAttribute("aria-hidden", "true");
+  }
+
+  function showTooltip(target, text) {
+    if (!target || !text) {
+      hideTooltip();
+      return;
+    }
+    const el = ensureTooltipElement();
+    tooltipTarget = target;
+    el.textContent = text;
+    el.setAttribute("aria-hidden", "false");
+    positionTooltip();
+  }
+
+  function installTooltipDelegation() {
+    if (document.body.dataset.tooltipDelegated === "1") return;
+    document.body.dataset.tooltipDelegated = "1";
+
+    document.addEventListener("mouseover", (event) => {
+      const target = event.target?.closest?.("[data-tooltip]");
+      const text = target?.dataset?.tooltip || "";
+      if (target && text) {
+        showTooltip(target, text);
+      }
+    });
+
+    document.addEventListener("mouseout", (event) => {
+      if (!tooltipTarget) return;
+      const to = event.relatedTarget;
+      if (to instanceof Element && tooltipTarget.contains(to)) return;
+      if (event.target instanceof Element && tooltipTarget.contains(event.target)) {
+        hideTooltip();
+      }
+    });
+
+    document.addEventListener("focusin", (event) => {
+      const target = event.target?.closest?.("[data-tooltip]");
+      const text = target?.dataset?.tooltip || "";
+      if (target && text) {
+        showTooltip(target, text);
+      }
+    });
+
+    document.addEventListener("focusout", (event) => {
+      if (!tooltipTarget) return;
+      if (event.target instanceof Element && tooltipTarget.contains(event.target)) {
+        hideTooltip();
+      }
+    });
+
+    window.addEventListener("scroll", () => {
+      if (tooltipTarget) positionTooltip();
+    }, true);
+
+    window.addEventListener("resize", () => {
+      if (tooltipTarget) positionTooltip();
+    });
   }
 
   function playMainContentExpand() {
@@ -658,6 +764,7 @@
   }
 
   function rerender() {
+    hideTooltip();
     const focusState = captureFocusState();
     const scrollPositions = captureScrollPositions();
     render();
@@ -916,8 +1023,8 @@
           </header>
           <div class="segmented">
             <div class="seg-track">
-              <button class="seg-btn ${mode === "argos" ? "active" : ""} ${argosModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="argos" aria-disabled="${argosModeAvailability.available ? "false" : "true"}" ${argosModeAvailability.available ? "" : `title="${escapeHtml(argosModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
-              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `title="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>AI 翻译</span></button>
+              <button class="seg-btn ${mode === "argos" ? "active" : ""} ${argosModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="argos" aria-disabled="${argosModeAvailability.available ? "false" : "true"}" ${argosModeAvailability.available ? "" : `data-tooltip="${escapeHtml(argosModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
+              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
           <section class="card input-card">
@@ -929,7 +1036,7 @@
               <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="输入或粘贴待翻译文本"></textarea>
             </div>
           </section>
-          <button class="primary-button" data-action="translate" ${translateEnabled ? "" : 'disabled title="请先配置词典翻译或AI翻译"'}>${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
+          <button class="primary-button" data-action="translate" ${translateEnabled ? "" : 'disabled data-tooltip="无可用翻译模式，请检查配置"'}>${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
           <section class="card result-card ${showResultCard ? "" : "hidden"}">
             <div class="card-head">
               <div class="card-title">翻译结果</div>
@@ -1216,8 +1323,8 @@
             <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble">${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
-              <button class="mode-chip ${mode === "argos" ? "active" : ""} ${bubbleArgosModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译" aria-disabled="${bubbleArgosModeAvailability.available ? "false" : "true"}" ${bubbleArgosModeAvailability.available ? "" : `title="${escapeHtml(bubbleArgosModeAvailability.tip)}"`}>${icons.book}</button>
-              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `title="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
+              <button class="mode-chip ${mode === "argos" ? "active" : ""} ${bubbleArgosModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译" aria-disabled="${bubbleArgosModeAvailability.available ? "false" : "true"}" ${bubbleArgosModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleArgosModeAvailability.tip)}"`}>${icons.book}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
             </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
           </header>
@@ -1300,9 +1407,11 @@
       mainModeArgosButton.classList.toggle("disabled", !argosEnabled);
       if (argosEnabled) {
         mainModeArgosButton.removeAttribute("title");
+        delete mainModeArgosButton.dataset.tooltip;
         mainModeArgosButton.setAttribute("aria-disabled", "false");
       } else {
-        mainModeArgosButton.setAttribute("title", "请先配置词典翻译");
+        mainModeArgosButton.removeAttribute("title");
+        mainModeArgosButton.dataset.tooltip = "模式不可用，请检查配置";
         mainModeArgosButton.setAttribute("aria-disabled", "true");
       }
     }
@@ -1310,9 +1419,11 @@
       mainModeAiButton.classList.toggle("disabled", !aiEnabled);
       if (aiEnabled) {
         mainModeAiButton.removeAttribute("title");
+        delete mainModeAiButton.dataset.tooltip;
         mainModeAiButton.setAttribute("aria-disabled", "false");
       } else {
-        mainModeAiButton.setAttribute("title", "请先配置AI翻译");
+        mainModeAiButton.removeAttribute("title");
+        mainModeAiButton.dataset.tooltip = "模式不可用，请检查配置";
         mainModeAiButton.setAttribute("aria-disabled", "true");
       }
     }
@@ -1322,8 +1433,10 @@
       translateButton.disabled = !enabled;
       if (enabled) {
         translateButton.removeAttribute("title");
+        delete translateButton.dataset.tooltip;
       } else {
-        translateButton.setAttribute("title", "请先配置词典翻译或AI翻译");
+        translateButton.removeAttribute("title");
+        translateButton.dataset.tooltip = "无可用翻译模式，请检查配置";
       }
     }
     if (candidateList) {
@@ -1388,9 +1501,11 @@
       modeArgos.classList.toggle("disabled", !argosEnabled);
       if (argosEnabled) {
         modeArgos.removeAttribute("title");
+        delete modeArgos.dataset.tooltip;
         modeArgos.setAttribute("aria-disabled", "false");
       } else {
-        modeArgos.setAttribute("title", "请先配置词典翻译");
+        modeArgos.removeAttribute("title");
+        modeArgos.dataset.tooltip = "模式不可用，请检查配置";
         modeArgos.setAttribute("aria-disabled", "true");
       }
     }
@@ -1400,9 +1515,11 @@
       modeAi.classList.toggle("disabled", !aiEnabled);
       if (aiEnabled) {
         modeAi.removeAttribute("title");
+        delete modeAi.dataset.tooltip;
         modeAi.setAttribute("aria-disabled", "false");
       } else {
-        modeAi.setAttribute("title", "请先配置AI翻译");
+        modeAi.removeAttribute("title");
+        modeAi.dataset.tooltip = "模式不可用，请检查配置";
         modeAi.setAttribute("aria-disabled", "true");
       }
     }
@@ -2262,6 +2379,16 @@
     if (!payload) return;
     applyBootstrap(payload);
     rerender();
+    if (state.view === "bubble") {
+      const settingsPayload = await apiCall("load_settings");
+      if (settingsPayload) {
+        state.settings = settingsPayload;
+        if (!state.config && settingsPayload.config) {
+          state.config = settingsPayload.config;
+        }
+        rerender();
+      }
+    }
     void apiCall("mark_ready");
   }
 
@@ -2271,6 +2398,7 @@
 
   render();
   installDragHandles();
+  installTooltipDelegation();
 
   if (window.pywebview) {
     void bootstrap();
