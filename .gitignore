@@ -3,6 +3,8 @@ __pycache__/
 *.db
 data/config.json
 data/webview/
+data/frontend/
+data/logs/
 dist/
 build/
 *.spec
