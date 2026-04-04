@@ -321,6 +321,54 @@ class WordPackWebviewApp:
             return "#000000"
         return "#eef1ec"
 
+    def _apply_window_background(self, window, color_hex: str) -> None:
+        if window is None:
+            return
+        native = getattr(window, "native", None)
+        if native is None:
+            return
+        try:
+            from System import Action  # type: ignore[import-not-found]
+            from System.Drawing import Color  # type: ignore[import-not-found]
+        except ImportError:
+            return
+
+        def _parse_color(value: str):
+            text = str(value or "").strip().lstrip("#")
+            if len(text) != 6:
+                return Color.Black
+            try:
+                r = int(text[0:2], 16)
+                g = int(text[2:4], 16)
+                b = int(text[4:6], 16)
+            except Exception:
+                return Color.Black
+            return Color.FromArgb(r, g, b)
+
+        target_color = _parse_color(color_hex)
+
+        def apply() -> None:
+            if getattr(native, "IsDisposed", False):
+                return
+            try:
+                native.BackColor = target_color
+            except Exception:
+                self.logger.exception("Failed to set native window background")
+
+        try:
+            if getattr(native, "InvokeRequired", False):
+                native.BeginInvoke(Action(apply))
+            else:
+                apply()
+        except Exception:
+            self.logger.exception("Failed to apply native window background")
+
+    def _apply_theme_backgrounds(self) -> None:
+        main_bg = self._window_background_color("main")
+        bubble_bg = self._window_background_color("bubble")
+        self._apply_window_background(self.main_window, main_bg)
+        self._apply_window_background(self.bubble_window, bubble_bg)
+
     def _centered_position(self, width: int, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()
         x = bounds.left + max(0, (bounds.width - width) // 2)
@@ -949,6 +997,7 @@ class WordPackWebviewApp:
             self.ui_state.theme_mode = self._resolved_theme_mode(value)
             self.config_store.save(self.config)
 
+        self._apply_theme_backgrounds()
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
         resolved = self._resolved_theme_mode(value)
@@ -1659,6 +1708,7 @@ class WordPackWebviewApp:
         self.ui_state.theme_mode = self._resolved_theme_mode(theme_mode)
         self.ui_state.direction = self._direction_label()
         self.config_store.save(self.config)
+        self._apply_theme_backgrounds()
         self._prune_history_by_policy()
         try:
             self.hotkeys.stop()
