@@ -194,6 +194,10 @@ input[type="checkbox"] {
   padding: 0;
 }
 
+body.view-main .window-shell {
+  background: #c4c6ca;
+}
+
 .window-card {
   width: 100%;
   height: 100%;
@@ -219,7 +223,7 @@ body.view-main .window-card {
   padding: 10px;
   border: 1px solid #c4c6ca;
   border-radius: 20px;
-  background: #c2c7ce;
+  background: #c4c6ca;
   backdrop-filter: none;
   box-shadow: none;
 }
@@ -582,24 +586,28 @@ body.view-main .source-textarea::placeholder {
   color: #7a8aa2;
 }
 
-body.view-main[data-main-resizing="1"] .source-textarea,
-body.view-main[data-main-resizing="1"] .result-scroll {
-  overflow: hidden !important;
+body.view-main .result-pane,
+body.view-main .result-actions,
+body.view-main .candidate-pane {
+  opacity: 1;
+  filter: blur(0);
 }
 
-/* Keep input area stable while main window animates height expansion. */
-body.view-main[data-main-resizing="1"] .window-card > .input-card {
-  flex: 0 0 auto;
+body.view-main[data-main-content-expanding="1"] .result-pane,
+body.view-main[data-main-content-expanding="1"] .result-actions,
+body.view-main[data-main-content-expanding="1"] .candidate-pane {
+  animation: mainContentReveal 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-body.view-main[data-main-resizing="1"] .input-shell {
-  flex: 0 0 auto;
-}
-
-body.view-main[data-main-resizing="1"] .source-textarea {
-  height: 112px;
-  min-height: 112px;
-  max-height: 112px;
+@keyframes mainContentReveal {
+  0% {
+    opacity: 0.12;
+    filter: blur(1.8px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
 }
 
 .input-shell {
@@ -959,6 +967,10 @@ body.view-main .ghost-button {
   transition: opacity 170ms ease, visibility 0s linear 170ms;
 }
 
+body.view-main .side-sheet {
+  background: #c4c6ca;
+}
+
 .side-sheet.open {
   opacity: 1;
   visibility: visible;
@@ -1000,7 +1012,7 @@ body.view-main .sheet-backdrop,
 body.view-main .modal-backdrop,
 body.view-main .zoom-modal .modal-backdrop {
   background: rgba(63, 68, 76, 0.18);
-  backdrop-filter: blur(4px);
+  backdrop-filter: none;
 }
 
 .sheet-panel,

@@ -193,7 +193,7 @@
     if (!canUseAi) {
       return {
         enabled: false,
-        tip: "AI 不可用，请先配置连接",
+        tip: "",
       };
     }
     if (!String(sourceText || "").trim()) {
@@ -218,6 +218,7 @@
       .map((item, index) => `${index + 1}. ${String(item || "").trim()}`)
       .filter(Boolean)
       .join("\n");
+  const isSuppressedAiNotice = (text) => /AI\s*不可用/.test(String(text || ""));
   function normalizeCandidateText(value) {
     return String(value || "")
       .trim()
@@ -340,46 +341,49 @@
     );
   }
 
+  function playMainContentExpand() {
+    if (mainContentExpandTimer) {
+      window.clearTimeout(mainContentExpandTimer);
+      mainContentExpandTimer = 0;
+    }
+    document.body.dataset.mainContentExpanding = "1";
+    mainContentExpandTimer = window.setTimeout(() => {
+      delete document.body.dataset.mainContentExpanding;
+      mainContentExpandTimer = 0;
+    }, 220);
+  }
+
   function syncMainCompact() {
     if (state.view !== "main") return;
     const desired = desiredMainCompact();
     const compactKey = desired ? "true" : "false";
     if (mainWindowCompact === compactKey) return;
     mainWindowCompact = compactKey;
-    if (mainResizeMaskTimer) {
-      window.clearTimeout(mainResizeMaskTimer);
-      mainResizeMaskTimer = 0;
-    }
-    document.body.dataset.mainResizing = "1";
-    mainResizeMaskTimer = window.setTimeout(() => {
-      delete document.body.dataset.mainResizing;
-      mainResizeMaskTimer = 0;
-    }, 380);
-    void apiCall("set_main_compact", desired);
+    void apiCall("set_main_compact", desired)
+      .then((payload) => {
+        if (!desired && (payload?.ok ?? true)) {
+          playMainContentExpand();
+        }
+      })
+      .catch(() => {});
   }
 
   function clearSideSheetOpenTimer() {
-    if (!sideSheetOpenTimer) return;
-    window.clearTimeout(sideSheetOpenTimer);
-    sideSheetOpenTimer = 0;
+    if (!sideSheetOpenRaf) return;
+    window.cancelAnimationFrame(sideSheetOpenRaf);
+    sideSheetOpenRaf = 0;
   }
 
   function stageOpenSideSheet(kind) {
     clearSideSheetOpenTimer();
-    forceMainExpandedUntil = Date.now() + SIDE_SHEET_OPEN_DELAY_MS + 320;
-    state.historyOpen = false;
-    state.settingsOpen = false;
+    forceMainExpandedUntil = Date.now() + 320;
+    state.historyOpen = kind === "history";
+    state.settingsOpen = kind === "settings";
     mainWindowCompact = "false";
-    void apiCall("set_main_compact", false);
     rerender();
+    void apiCall("set_main_compact", false);
     return new Promise((resolve) => {
-      sideSheetOpenTimer = window.setTimeout(() => {
-        sideSheetOpenTimer = 0;
-        if (kind === "history") state.historyOpen = true;
-        if (kind === "settings") state.settingsOpen = true;
-        rerender();
-        resolve();
-      }, SIDE_SHEET_OPEN_DELAY_MS);
+      resolve();
     });
   }
 
@@ -429,12 +433,11 @@
   let settingsSaveInFlight = false;
   let settingsSaveQueued = false;
   let keepHistorySearchFocus = false;
-  let sideSheetOpenTimer = 0;
-  let mainResizeMaskTimer = 0;
+  let sideSheetOpenRaf = 0;
+  let mainContentExpandTimer = 0;
   let forceMainExpandedUntil = 0;
   const HISTORY_SEARCH_DEBOUNCE_MS = 500;
   const SETTINGS_SAVE_DEBOUNCE_MS = 260;
-  const SIDE_SHEET_OPEN_DELAY_MS = 150;
 
   function shouldRunHistorySearch(value) {
     const query = String(value || "").trim();
@@ -496,6 +499,9 @@
   }
 
   function showToast(type, text) {
+    if (isSuppressedAiNotice(text)) {
+      return;
+    }
     state.toast = { type: type || "", text: text || "" };
     if (toastTimer) {
       window.clearTimeout(toastTimer);
@@ -1406,7 +1412,6 @@
             break;
           }
           if (nextMode === "ai" && !state.aiAvailable) {
-            showToast("warning", "AI 不可用，请先配置连接");
             break;
           }
           if (nextMode !== "ai") {
@@ -1435,7 +1440,6 @@
           break;
         }
         if (nextMode === "ai" && !state.aiAvailable) {
-          showToast("warning", "AI 不可用，请先配置连接");
           break;
         }
         const previousBubbleMode = state.bubble?.mode || currentMode || "argos";
@@ -1514,7 +1518,7 @@
         if ((state.config?.translation_mode || "argos") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
-            showToast("warning", modeResp.message || "AI 不可用，请先配置连接");
+            showToast("warning", modeResp.message || "模式切换失败");
             break;
           }
           if (state.config) state.config.translation_mode = "ai";
@@ -1549,7 +1553,7 @@
         if ((state.config?.translation_mode || state.ui?.translation_mode || "argos") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
-            showToast("warning", modeResp.message || "AI 不可用，请先配置连接");
+            showToast("warning", modeResp.message || "模式切换失败");
             if (state.bubble) {
               state.bubble.candidate_pending = false;
             }
@@ -1902,9 +1906,6 @@
         state.aiAvailableChecked = Boolean(payload.checked);
         state.aiAvailabilityMessage = String(payload.message || "");
         state.aiAvailabilityCheckedAt = Number(payload.checkedAt || state.aiAvailabilityCheckedAt || 0);
-        if (payload.checked && !payload.available && state.config?.translation_mode === "ai") {
-          state.notice = { type: "warning", text: "AI 当前不可用，请检查连接配置" };
-        }
         if (state.view === "main" && patchMainDynamic()) return;
         if (state.view === "bubble" && patchBubbleDynamic()) return;
         break;

@@ -267,6 +267,16 @@ class WordPackWebviewApp:
         if abs(delta) < 20:
             self._apply_main_geometry(x, y, width, to_height)
             return
+        try:
+            # Apply initial geometry once, then animate with lightweight resize-only frames.
+            self.main_window.move(int(x), int(y))
+            self.main_window.resize(int(width), int(from_height))
+            self.main_window.show()
+            self.hidden = False
+        except Exception:
+            self.logger.exception("Failed to initialize main window resize animation")
+            self._apply_main_geometry(x, y, width, to_height)
+            return
         duration_sec = 0.22
         frame_interval_sec = 1 / 60
         start = time.perf_counter()
@@ -280,7 +290,11 @@ class WordPackWebviewApp:
             eased = progress * progress * (3 - 2 * progress)
             h = int(round(from_height + (delta * eased)))
             if h != last_h:
-                self._apply_main_geometry(x, y, width, h)
+                try:
+                    self.main_window.resize(int(width), int(h))
+                except Exception:
+                    self.logger.exception("Failed during main window resize animation frame")
+                    break
                 last_h = h
             sleep_for = frame_interval_sec - (time.perf_counter() - now)
             if sleep_for > 0:
@@ -619,15 +633,17 @@ class WordPackWebviewApp:
         compact = bool(compact)
         if self.main_window is None:
             self._main_compact = compact
-            return {"ok": False, "compact": compact}
+            return {"ok": False, "compact": compact, "fromHeight": 0, "toHeight": 0, "durationMs": 0}
         if self._main_window_geometry_before_zoom is not None:
             self._main_compact = compact
-            return {"ok": True, "compact": compact}
+            current = self._current_main_geometry()
+            current_height = int(current[3]) if current else 0
+            return {"ok": True, "compact": compact, "fromHeight": current_height, "toHeight": current_height, "durationMs": 0}
 
         current = self._current_main_geometry()
         if current is None:
             self._main_compact = compact
-            return {"ok": False, "compact": compact}
+            return {"ok": False, "compact": compact, "fromHeight": 0, "toHeight": 0, "durationMs": 0}
 
         x, y, width, current_height = current
         target_height = self.MAIN_HEIGHT
@@ -635,15 +651,27 @@ class WordPackWebviewApp:
             requested = self.MAIN_COMPACT_HEIGHT if height is None else int(height)
             target_height = max(self.MAIN_MIN_HEIGHT, min(self.MAIN_HEIGHT, requested))
         if compact == self._main_compact and int(current_height) == int(target_height):
-            return {"ok": True, "compact": compact}
+            return {
+                "ok": True,
+                "compact": compact,
+                "fromHeight": int(current_height),
+                "toHeight": int(target_height),
+                "durationMs": 0,
+            }
         bounds = get_virtual_screen_bounds()
         max_x = max(bounds.left + 8, bounds.right - int(width) - 8)
         max_y = max(bounds.top + 8, bounds.bottom - int(target_height) - 8)
         clamped_x = min(max(bounds.left + 8, int(x)), int(max_x))
         clamped_y = min(max(bounds.top + 8, int(y)), int(max_y))
-        self._animate_main_height(clamped_x, clamped_y, width, current_height, target_height)
+        self._apply_main_geometry(clamped_x, clamped_y, width, target_height)
         self._main_compact = compact
-        return {"ok": True, "compact": compact}
+        return {
+            "ok": True,
+            "compact": compact,
+            "fromHeight": int(current_height),
+            "toHeight": int(target_height),
+            "durationMs": 0,
+        }
 
     def _serialize_config(self) -> dict[str, Any]:
         return asdict(self.config)
