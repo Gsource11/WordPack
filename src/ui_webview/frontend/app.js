@@ -387,6 +387,41 @@
     });
   }
 
+  async function openHistoryPanel() {
+    await stageOpenSideSheet("history");
+    void loadHistory(true);
+  }
+
+  async function openSettingsPanel() {
+    state.settingsDraft = clone(state.config || {});
+    state.notice = null;
+    state.testingAi = false;
+    state.aiTestState = "idle";
+    await stageOpenSideSheet("settings");
+    const payload = await apiCall("load_settings");
+    if (payload) {
+      if (payload.config) state.config = payload.config;
+      state.settings = payload;
+      state.settingsDraft = clone(payload.config || state.config || {});
+      rerender();
+    }
+  }
+
+  function showMainFromTray() {
+    clearSideSheetOpenTimer();
+    state.historyOpen = false;
+    state.settingsOpen = false;
+    state.zoomOpen = false;
+    rerender();
+    syncMainCompact();
+    window.requestAnimationFrame(() => {
+      const input = document.getElementById("sourceText");
+      if (input instanceof HTMLTextAreaElement) {
+        input.focus();
+      }
+    });
+  }
+
   function updateResultCardVisibility() {
     const resultCard = document.querySelector(".result-card");
     if (!resultCard) return false;
@@ -1363,8 +1398,7 @@
 
     switch (action) {
       case "open-history":
-        await stageOpenSideSheet("history");
-        void loadHistory(true);
+        await openHistoryPanel();
         break;
       case "close-history":
         clearSideSheetOpenTimer();
@@ -1372,20 +1406,7 @@
         rerender();
         break;
       case "open-settings":
-        state.settingsDraft = clone(state.config || {});
-        state.notice = null;
-        state.testingAi = false;
-        state.aiTestState = "idle";
-        await stageOpenSideSheet("settings");
-        {
-          const payload = await apiCall("load_settings");
-          if (payload) {
-            if (payload.config) state.config = payload.config;
-            state.settings = payload;
-            state.settingsDraft = clone(payload.config || state.config || {});
-            rerender();
-          }
-        }
+        await openSettingsPanel();
         break;
       case "close-settings":
         clearSideSheetOpenTimer();
@@ -2017,6 +2038,21 @@
         break;
       case "screenshot-ocr-error":
         state.notice = { type: "error", text: payload.message || "截图识别失败" };
+        break;
+      case "tray-open-panel":
+        {
+          const panel = String(payload.panel || "").toLowerCase();
+          if (panel === "history") {
+            void openHistoryPanel();
+          } else if (panel === "settings") {
+            void openSettingsPanel();
+          }
+          shouldRerender = false;
+        }
+        break;
+      case "tray-show-main":
+        showMainFromTray();
+        shouldRerender = false;
         break;
       default:
         break;

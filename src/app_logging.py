@@ -6,7 +6,16 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-LOG_DIR = Path.home() / ".wordpack"
+def _resolve_runtime_data_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        return exe_dir / "data"
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+APP_RUNTIME_DIR = _resolve_runtime_data_dir()
+LEGACY_USER_DIR = Path.home() / ".wordpack"
+LOG_DIR = APP_RUNTIME_DIR / "logs"
 MAX_LOG_BYTES = 10 * 1024 * 1024
 
 _lock = threading.Lock()
@@ -62,6 +71,16 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     with _lock:
         if _configured:
             return logging.getLogger("wordpack")
+
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            if LEGACY_USER_DIR.exists() and LEGACY_USER_DIR != APP_RUNTIME_DIR:
+                for legacy_log in LEGACY_USER_DIR.glob("*.log"):
+                    target = LOG_DIR / legacy_log.name
+                    if not target.exists():
+                        target.write_bytes(legacy_log.read_bytes())
+        except Exception:
+            pass
 
         root = logging.getLogger()
         root.setLevel(level)

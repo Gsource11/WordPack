@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import ctypes
+import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -12,7 +14,7 @@ from typing import Any
 
 import webview
 
-from src.app_logging import LOG_DIR, get_logger
+from src.app_logging import APP_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
 from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
@@ -22,6 +24,7 @@ from src.selection_capture import ClipboardCaptureResult, SelectionCaptureServic
 from src.storage import HistoryStore
 from src.translator import TranslationService
 from src.native_icon_overlay import NativeIconOverlay
+from src.tray_icon import TrayIconManager
 from src.ui_webview.api import WindowApi
 from src.ui_webview.backend import (
     capture_virtual_screen,
@@ -55,14 +58,14 @@ class WordPackWebviewApp:
         if getattr(sys, "frozen", False):
             bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
             exe_dir = Path(sys.executable).resolve().parent
-            project_data_dir = exe_dir.parent / "data"
             self.base_dir = bundle_root
-            self.data_dir = project_data_dir if project_data_dir.exists() else (exe_dir / "data")
+            legacy_data_candidates = [LEGACY_USER_DIR / "data", exe_dir.parent / "data", exe_dir / "data"]
         else:
             self.base_dir = Path(__file__).resolve().parent.parent.parent
-            self.data_dir = self.base_dir / "data"
+            legacy_data_candidates = [LEGACY_USER_DIR / "data", self.base_dir / "data"]
         self.logger = get_logger(__name__)
         self.lock = threading.RLock()
+        self.data_dir = self._resolve_data_dir(legacy_data_candidates)
 
         self.config_store = ConfigStore(self.data_dir / "config.json")
         self.config: AppConfig = self.config_store.load()
@@ -75,6 +78,7 @@ class WordPackWebviewApp:
         self.bridge = FrontendBridge(self.logger)
         self._app_icon_url = icon_data_url()
         self._app_icon_ico = ensure_icon_ico()
+        self.frontend_dir = self._resolve_frontend_dir()
         self.webview_storage_dir = self._resolve_webview_storage_dir()
 
         self.ui_state = UiState(
@@ -99,6 +103,17 @@ class WordPackWebviewApp:
             on_click=lambda: self.trigger_selection_translate(),
             window_size=self.ICON_WIDTH,
             icon_size=18,
+        )
+        tray_icon = self._app_icon_ico or icon_path("app-icon.ico")
+        self.tray_icon = TrayIconManager(
+            title=APP_TITLE,
+            icon_path=str(tray_icon),
+            on_action=self._on_tray_action,
+            state_getter=lambda: {
+                "selection_enabled": bool(self.config.interaction.selection_enabled),
+                "screenshot_enabled": bool(self.config.interaction.screenshot_enabled),
+            },
+            logger=self.logger,
         )
 
         self.hidden = False
@@ -146,8 +161,64 @@ class WordPackWebviewApp:
         self._hide_main_after_zoom_close = False
         self._main_compact = True
 
+    def _resolve_data_dir(self, legacy_candidates: list[Path]) -> Path:
+        def first_legacy_dir() -> Path:
+            for item in legacy_candidates:
+                try:
+                    candidate = Path(item)
+                    candidate.mkdir(parents=True, exist_ok=True)
+                    return candidate
+                except Exception:
+                    continue
+            fallback = self.base_dir / "data"
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
+
+        override_raw = str(os.environ.get("WORDPACK_DATA_DIR") or "").strip()
+        if override_raw:
+            override = Path(override_raw).expanduser()
+            override.mkdir(parents=True, exist_ok=True)
+            return override
+
+        shared = APP_RUNTIME_DIR
+        try:
+            shared.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self.logger.warning("Shared data dir unavailable (%s), fallback to legacy: %s", exc, shared)
+            return first_legacy_dir()
+        if (shared / "config.json").exists() or (shared / "history.db").exists():
+            return shared
+
+        for legacy in legacy_candidates:
+            try:
+                if not legacy.exists():
+                    continue
+                has_payload = (legacy / "config.json").exists() or (legacy / "history.db").exists()
+                if not has_payload:
+                    continue
+                for name in ("config.json", "history.db"):
+                    src = legacy / name
+                    dst = shared / name
+                    if src.exists() and not dst.exists():
+                        shutil.copy2(src, dst)
+                legacy_webview = legacy / "webview"
+                shared_webview = shared / "webview"
+                if legacy_webview.exists() and not shared_webview.exists():
+                    shutil.copytree(legacy_webview, shared_webview, dirs_exist_ok=True)
+                return shared
+            except Exception:
+                self.logger.exception("Failed migrating legacy data dir: %s", legacy)
+        try:
+            probe = shared / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return shared
+        except Exception as exc:
+            self.logger.warning("Shared data dir not writable (%s), fallback to legacy: %s", exc, shared)
+            return first_legacy_dir()
+
     def _resolve_webview_storage_dir(self) -> Path:
-        candidates = [LOG_DIR / "webview", self.data_dir / "webview"]
+        candidates = [self.data_dir / "webview"]
         for candidate in candidates:
             try:
                 candidate.mkdir(parents=True, exist_ok=True)
@@ -157,6 +228,30 @@ class WordPackWebviewApp:
                 return candidate
             except Exception:
                 continue
+        return self.data_dir
+
+    def _frontend_source_dir(self) -> Path:
+        return self.base_dir / "src" / "ui_webview" / "frontend"
+
+    def _resolve_frontend_dir(self) -> Path:
+        source = self._frontend_source_dir()
+        preferred_targets = [self.data_dir / "frontend"]
+
+        for target in preferred_targets:
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                probe = target / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                if source.exists():
+                    shutil.copytree(source, target, dirs_exist_ok=True)
+                return target
+            except Exception as exc:
+                self.logger.warning("Runtime frontend dir unavailable (%s), fallback target: %s", exc, target)
+
+        if source.exists():
+            self.logger.warning("Fallback to source frontend dir: %s", source)
+            return source
         return self.data_dir
 
     def run(self) -> None:
@@ -183,6 +278,10 @@ class WordPackWebviewApp:
             transparent=False,
         )
         self.logger.info("Main webview window created")
+        try:
+            self.tray_icon.start()
+        except Exception:
+            self.logger.exception("Failed to start tray icon")
         webview.start(
             self._on_webview_started,
             http_server=True,
@@ -205,7 +304,7 @@ class WordPackWebviewApp:
         return "dark" if current == "dark" else "light"
 
     def _frontend_url(self, view_name: str) -> str:
-        base = (self.base_dir / "src" / "ui_webview" / "frontend" / "index.html").resolve().as_posix()
+        base = (self.frontend_dir / "index.html").resolve().as_posix()
         rev = int(time.time())
         return f"{base}?view={view_name}&rev={rev}"
 
@@ -561,6 +660,10 @@ class WordPackWebviewApp:
         self._cancel_selection_icon_hide_timer()
         self._cancel_bubble_hide_timer()
         self._native_icon_overlay.destroy()
+        try:
+            self.tray_icon.stop()
+        except Exception:
+            self.logger.exception("Failed to stop tray icon")
         self._input_poll_stop.set()
         self.mouse_hooks.stop()
         self.hotkeys.stop()
@@ -806,6 +909,69 @@ class WordPackWebviewApp:
         self.bridge.send("icon", "theme-updated", {"themeMode": resolved, "mode": self.config.translation_mode})
         self.bridge.send("overlay", "theme-updated", {"themeMode": resolved})
         return payload
+
+    def _show_main_window(self) -> None:
+        if self.main_window is None:
+            return
+        try:
+            self.main_window.show()
+            self.hidden = False
+            self.bridge.send("main", "tray-show-main", {})
+        except Exception:
+            self.logger.exception("Failed to show main window from tray")
+
+    def _open_panel_from_tray(self, panel: str) -> None:
+        panel_name = "history" if str(panel or "").strip().lower() == "history" else "settings"
+        self._show_main_window()
+        self.bridge.send("main", "tray-open-panel", {"panel": panel_name})
+
+    def _toggle_selection_enabled_from_tray(self) -> dict[str, Any]:
+        with self.lock:
+            self.config.interaction.selection_enabled = not bool(self.config.interaction.selection_enabled)
+            enabled = bool(self.config.interaction.selection_enabled)
+            self.config_store.save(self.config)
+        if not enabled:
+            self.close_window("icon")
+        self.set_status("已启用划词" if enabled else "已关闭划词")
+        payload = self._config_event_payload()
+        self.bridge.send("main", "config-updated", payload)
+        return {"ok": True, "enabled": enabled}
+
+    def _toggle_screenshot_enabled_from_tray(self) -> dict[str, Any]:
+        with self.lock:
+            self.config.interaction.screenshot_enabled = not bool(self.config.interaction.screenshot_enabled)
+            enabled = bool(self.config.interaction.screenshot_enabled)
+            self.config_store.save(self.config)
+        try:
+            self.hotkeys.stop()
+            self.hotkeys.start()
+        except Exception:
+            self.logger.exception("Failed to restart hotkeys from tray screenshot toggle")
+        self.set_status("已启用截图翻译" if enabled else "已关闭截图翻译")
+        payload = self._config_event_payload()
+        self.bridge.send("main", "config-updated", payload)
+        return {"ok": True, "enabled": enabled}
+
+    def _on_tray_action(self, action: str) -> None:
+        key = str(action or "").strip().lower()
+        if key == "exit":
+            self.shutdown()
+            return
+        if key == "show_main":
+            self._show_main_window()
+            return
+        if key == "open_history":
+            self._open_panel_from_tray("history")
+            return
+        if key == "open_settings":
+            self._open_panel_from_tray("settings")
+            return
+        if key == "toggle_selection":
+            self._toggle_selection_enabled_from_tray()
+            return
+        if key == "toggle_screenshot":
+            self._toggle_screenshot_enabled_from_tray()
+            return
 
     def cycle_direction(self) -> dict[str, Any]:
         options = ["auto", "en->zh", "zh->en"]
@@ -2183,8 +2349,15 @@ class WordPackWebviewApp:
 
     def close_window(self, kind: str) -> dict[str, Any]:
         if kind == "main":
-            self.shutdown()
-            return {"ok": True}
+            if self.main_window is not None:
+                try:
+                    self.main_window.hide()
+                    self.hidden = True
+                    return {"ok": True, "hidden": True}
+                except Exception:
+                    self.logger.exception("Failed to hide main window")
+                    return {"ok": False, "hidden": False}
+            return {"ok": True, "hidden": True}
 
         if kind == "bubble":
             with self.lock:
