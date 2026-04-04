@@ -213,6 +213,37 @@
     }
     return { enabled: true, tip: "生成 4 个候选译文" };
   }
+
+  function argosAvailability() {
+    const settings = state.settings || {};
+    const offlineModels = Array.isArray(settings.offlineModels) ? settings.offlineModels : [];
+    const hasOfflineModels = offlineModels.length > 0;
+    const runtimeReady = Boolean(settings.offlineRuntimeReady);
+    const available = runtimeReady && hasOfflineModels;
+    return {
+      available,
+      tip: available ? "" : "请先配置词典翻译",
+    };
+  }
+
+  function aiAvailability() {
+    const available = Boolean(state.aiAvailable);
+    return {
+      available,
+      tip: available ? "" : "请先配置AI翻译",
+    };
+  }
+
+  function modeAvailability(mode) {
+    const normalized = String(mode || "").toLowerCase();
+    return normalized === "ai" ? aiAvailability() : argosAvailability();
+  }
+
+  function anyModeAvailable() {
+    const argos = argosAvailability();
+    const ai = aiAvailability();
+    return Boolean(argos.available || ai.available);
+  }
   const formatAllCandidates = (items) =>
     (Array.isArray(items) ? items : [])
       .map((item, index) => `${index + 1}. ${String(item || "").trim()}`)
@@ -814,6 +845,15 @@
     const mainResultContent = state.pending && !result ? skeletonMarkup("main") : escapeHtml(result);
     const historyPanel = state.historyPanel;
     const settings = state.settings || { offlineModels: [], offlineRuntimeReady: false, offlineRuntimeHint: "" };
+    const argosModeAvailability = modeAvailability("argos");
+    const aiModeAvailability = modeAvailability("ai");
+    const translateEnabled = anyModeAvailable();
+    const offlineModels = Array.isArray(settings.offlineModels) ? settings.offlineModels : [];
+    const hasOfflineModels = offlineModels.length > 0;
+    const argosNoticeClass = (!hasOfflineModels || !settings.offlineRuntimeReady) ? "warning" : "";
+    const argosNoticeHtml = !hasOfflineModels
+      ? `未检测到已导入的 Argos 模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">Argos 模型下载页</a> 下载模型后，再点击“导入 Argos 模型”。`
+      : escapeHtml(settings.offlineRuntimeReady ? (settings.offlineDiagnostics || "Argos 运行库可用") : (settings.offlineRuntimeHint || "Argos 运行库未就绪"));
     const draft = state.settingsDraft || clone(state.config || {});
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "icon";
@@ -876,8 +916,8 @@
           </header>
           <div class="segmented">
             <div class="seg-track">
-              <button class="seg-btn ${mode === "argos" ? "active" : ""}" data-action="set-mode" data-mode="argos">${icons.book}<span>词典翻译</span></button>
-              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai">${icons.robot}<span>AI 翻译</span></button>
+              <button class="seg-btn ${mode === "argos" ? "active" : ""} ${argosModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="argos" aria-disabled="${argosModeAvailability.available ? "false" : "true"}" ${argosModeAvailability.available ? "" : `title="${escapeHtml(argosModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
+              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `title="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
           <section class="card input-card">
@@ -889,7 +929,7 @@
               <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="输入或粘贴待翻译文本"></textarea>
             </div>
           </section>
-          <button class="primary-button" data-action="translate">${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
+          <button class="primary-button" data-action="translate" ${translateEnabled ? "" : 'disabled title="请先配置词典翻译或AI翻译"'}>${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
           <section class="card result-card ${showResultCard ? "" : "hidden"}">
             <div class="card-head">
               <div class="card-title">翻译结果</div>
@@ -1045,7 +1085,7 @@
                 <label>默认方向</label>
                 ${choiceGroupMarkup("offline.preferred_direction", draft.offline?.preferred_direction || "auto", directionOptions)}
               </div>
-              <div class="notice ${settings.offlineRuntimeReady ? "" : "warning"}">${escapeHtml(settings.offlineRuntimeReady ? (settings.offlineDiagnostics || "Argos 运行库可用") : (settings.offlineRuntimeHint || "Argos 运行库未就绪"))}</div>
+              <div class="notice ${argosNoticeClass}">${argosNoticeHtml}</div>
               <div class="settings-actions">
                  <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入 Argos 模型</span></button>
               </div>
@@ -1156,6 +1196,8 @@
       aiAvailableChecked: state.aiAvailableChecked,
     });
     const bubbleModeAiEnabled = Boolean(state.aiAvailable);
+    const bubbleArgosModeAvailability = modeAvailability("argos");
+    const bubbleAiModeAvailability = modeAvailability("ai");
     const bubbleCandidateDisabled = !bubbleCandidateState.enabled || bubble.candidate_pending;
     const showBubbleCandidatePane = Boolean(state.bubbleCandidatePaneOpen || bubble.candidate_pending || bubbleCandidateItems.length);
     const bubbleDisplayedCandidates = (String(bubble.result_text || "").trim() ? [String(bubble.result_text || "").trim(), ...dedupeCandidateItems(bubbleCandidateItems)] : dedupeCandidateItems(bubbleCandidateItems)).slice(0, 4);
@@ -1174,8 +1216,8 @@
             <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble">${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
-              <button class="mode-chip ${mode === "argos" ? "active" : ""}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译">${icons.book}</button>
-              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译">${icons.robot}</button>
+              <button class="mode-chip ${mode === "argos" ? "active" : ""} ${bubbleArgosModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译" aria-disabled="${bubbleArgosModeAvailability.available ? "false" : "true"}" ${bubbleArgosModeAvailability.available ? "" : `title="${escapeHtml(bubbleArgosModeAvailability.tip)}"`}>${icons.book}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `title="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
             </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
           </header>
@@ -1251,10 +1293,38 @@
       candidateButton.removeAttribute("title");
     }
     const mainModeAiButton = document.querySelector('.seg-btn[data-mode="ai"]');
+    const mainModeArgosButton = document.querySelector('.seg-btn[data-mode="argos"]');
+    const argosEnabled = modeAvailability("argos").available;
+    const aiEnabled = modeAvailability("ai").available;
+    if (mainModeArgosButton) {
+      mainModeArgosButton.classList.toggle("disabled", !argosEnabled);
+      if (argosEnabled) {
+        mainModeArgosButton.removeAttribute("title");
+        mainModeArgosButton.setAttribute("aria-disabled", "false");
+      } else {
+        mainModeArgosButton.setAttribute("title", "请先配置词典翻译");
+        mainModeArgosButton.setAttribute("aria-disabled", "true");
+      }
+    }
     if (mainModeAiButton) {
-      const aiEnabled = Boolean(state.aiAvailable);
       mainModeAiButton.classList.toggle("disabled", !aiEnabled);
-      mainModeAiButton.removeAttribute("title");
+      if (aiEnabled) {
+        mainModeAiButton.removeAttribute("title");
+        mainModeAiButton.setAttribute("aria-disabled", "false");
+      } else {
+        mainModeAiButton.setAttribute("title", "请先配置AI翻译");
+        mainModeAiButton.setAttribute("aria-disabled", "true");
+      }
+    }
+    const translateButton = document.querySelector('.primary-button[data-action="translate"]');
+    if (translateButton instanceof HTMLButtonElement) {
+      const enabled = anyModeAvailable();
+      translateButton.disabled = !enabled;
+      if (enabled) {
+        translateButton.removeAttribute("title");
+      } else {
+        translateButton.setAttribute("title", "请先配置词典翻译或AI翻译");
+      }
     }
     if (candidateList) {
       if (displayedMainCandidates.length) {
@@ -1312,12 +1382,29 @@
     result.classList.toggle("pending-waiting", Boolean(state.bubble.pending && !state.bubble.result_text));
     pin.classList.toggle("active", Boolean(state.bubble.pinned));
     const activeMode = state.bubble.mode || "argos";
-    if (modeArgos) modeArgos.classList.toggle("active", activeMode === "argos");
+    if (modeArgos) {
+      const argosEnabled = modeAvailability("argos").available;
+      modeArgos.classList.toggle("active", activeMode === "argos");
+      modeArgos.classList.toggle("disabled", !argosEnabled);
+      if (argosEnabled) {
+        modeArgos.removeAttribute("title");
+        modeArgos.setAttribute("aria-disabled", "false");
+      } else {
+        modeArgos.setAttribute("title", "请先配置词典翻译");
+        modeArgos.setAttribute("aria-disabled", "true");
+      }
+    }
     if (modeAi) {
-      const aiEnabled = Boolean(state.aiAvailable);
+      const aiEnabled = modeAvailability("ai").available;
       modeAi.classList.toggle("active", activeMode === "ai");
       modeAi.classList.toggle("disabled", !aiEnabled);
-      modeAi.removeAttribute("title");
+      if (aiEnabled) {
+        modeAi.removeAttribute("title");
+        modeAi.setAttribute("aria-disabled", "false");
+      } else {
+        modeAi.setAttribute("title", "请先配置AI翻译");
+        modeAi.setAttribute("aria-disabled", "true");
+      }
     }
 
     const candidateBtn = document.querySelector('[data-action="generate-candidates-bubble"]');
@@ -1454,6 +1541,9 @@
           if (!nextMode || currentMode === nextMode) {
             break;
           }
+          if (nextMode === "argos" && !modeAvailability("argos").available) {
+            break;
+          }
           if (nextMode === "ai" && !state.aiAvailable) {
             break;
           }
@@ -1480,6 +1570,9 @@
         }
         const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
         if (currentMode === nextMode) {
+          break;
+        }
+        if (nextMode === "argos" && !modeAvailability("argos").available) {
           break;
         }
         if (nextMode === "ai" && !state.aiAvailable) {
@@ -1542,6 +1635,23 @@
         await apiCall("cycle_direction");
         break;
       case "translate":
+        if (!anyModeAvailable()) {
+          break;
+        }
+        {
+          const currentMode = String(state.config?.translation_mode || state.ui?.translation_mode || "argos").toLowerCase();
+          if (!modeAvailability(currentMode).available) {
+            const fallbackMode = modeAvailability("ai").available ? "ai" : "argos";
+            if (fallbackMode !== currentMode) {
+              const modeResp = await apiCall("set_mode", fallbackMode);
+              if (modeResp && modeResp.ok === false) {
+                break;
+              }
+              if (state.config) state.config.translation_mode = fallbackMode;
+              state.ui.translation_mode = fallbackMode;
+            }
+          }
+        }
         scrollFollowState["main-result"] = true;
         await apiCall("translate", state.sourceText, "翻译");
         break;

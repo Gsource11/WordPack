@@ -1561,6 +1561,14 @@ body.view-main .choice-chip.active {
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.notice a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .notice.warning {
