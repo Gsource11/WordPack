@@ -318,6 +318,9 @@
   }
 
   function desiredMainCompact() {
+    if (Date.now() < forceMainExpandedUntil) {
+      return false;
+    }
     return (
       state.view === "main"
       && !state.settingsOpen
@@ -334,7 +337,41 @@
     const compactKey = desired ? "true" : "false";
     if (mainWindowCompact === compactKey) return;
     mainWindowCompact = compactKey;
+    if (mainResizeMaskTimer) {
+      window.clearTimeout(mainResizeMaskTimer);
+      mainResizeMaskTimer = 0;
+    }
+    document.body.dataset.mainResizing = "1";
+    mainResizeMaskTimer = window.setTimeout(() => {
+      delete document.body.dataset.mainResizing;
+      mainResizeMaskTimer = 0;
+    }, 380);
     void apiCall("set_main_compact", desired);
+  }
+
+  function clearSideSheetOpenTimer() {
+    if (!sideSheetOpenTimer) return;
+    window.clearTimeout(sideSheetOpenTimer);
+    sideSheetOpenTimer = 0;
+  }
+
+  function stageOpenSideSheet(kind) {
+    clearSideSheetOpenTimer();
+    forceMainExpandedUntil = Date.now() + SIDE_SHEET_OPEN_DELAY_MS + 320;
+    state.historyOpen = false;
+    state.settingsOpen = false;
+    mainWindowCompact = "false";
+    void apiCall("set_main_compact", false);
+    rerender();
+    return new Promise((resolve) => {
+      sideSheetOpenTimer = window.setTimeout(() => {
+        sideSheetOpenTimer = 0;
+        if (kind === "history") state.historyOpen = true;
+        if (kind === "settings") state.settingsOpen = true;
+        rerender();
+        resolve();
+      }, SIDE_SHEET_OPEN_DELAY_MS);
+    });
   }
 
   function updateResultCardVisibility() {
@@ -383,8 +420,12 @@
   let settingsSaveInFlight = false;
   let settingsSaveQueued = false;
   let keepHistorySearchFocus = false;
+  let sideSheetOpenTimer = 0;
+  let mainResizeMaskTimer = 0;
+  let forceMainExpandedUntil = 0;
   const HISTORY_SEARCH_DEBOUNCE_MS = 500;
   const SETTINGS_SAVE_DEBOUNCE_MS = 260;
+  const SIDE_SHEET_OPEN_DELAY_MS = 150;
 
   function shouldRunHistorySearch(value) {
     const query = String(value || "").trim();
@@ -1260,11 +1301,11 @@
 
     switch (action) {
       case "open-history":
-        state.historyOpen = true;
-        rerender();
+        await stageOpenSideSheet("history");
         void loadHistory(true);
         break;
       case "close-history":
+        clearSideSheetOpenTimer();
         state.historyOpen = false;
         rerender();
         break;
@@ -1273,8 +1314,7 @@
         state.notice = null;
         state.testingAi = false;
         state.aiTestState = "idle";
-        state.settingsOpen = true;
-        rerender();
+        await stageOpenSideSheet("settings");
         {
           const payload = await apiCall("load_settings");
           if (payload) {
@@ -1286,6 +1326,7 @@
         }
         break;
       case "close-settings":
+        clearSideSheetOpenTimer();
         state.settingsOpen = false;
         rerender();
         break;

@@ -40,7 +40,7 @@ class WordPackWebviewApp:
     MAIN_WINDOW_BG = "#c4c6ca"
     BUBBLE_WINDOW_BG = "#c4c6ca"
     MAIN_WIDTH = 468
-    MAIN_HEIGHT = 760
+    MAIN_HEIGHT = 680
     MAIN_MIN_HEIGHT = 360
     MAIN_COMPACT_HEIGHT = 430
     MAIN_STARTUP_Y_SHIFT = 24
@@ -257,13 +257,25 @@ class WordPackWebviewApp:
         if abs(delta) < 20:
             self._apply_main_geometry(x, y, width, to_height)
             return
-        steps = 22
-        for idx in range(1, steps + 1):
-            progress = idx / steps
+        duration_sec = 0.22
+        frame_interval_sec = 1 / 60
+        start = time.perf_counter()
+        end = start + duration_sec
+        last_h = int(from_height)
+        while True:
+            now = time.perf_counter()
+            if now >= end:
+                break
+            progress = max(0.0, min(1.0, (now - start) / duration_sec))
             eased = progress * progress * (3 - 2 * progress)
             h = int(round(from_height + (delta * eased)))
-            self._apply_main_geometry(x, y, width, h)
-            time.sleep(0.01)
+            if h != last_h:
+                self._apply_main_geometry(x, y, width, h)
+                last_h = h
+            sleep_for = frame_interval_sec - (time.perf_counter() - now)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        self._apply_main_geometry(x, y, width, to_height)
 
     def _create_window(
         self,

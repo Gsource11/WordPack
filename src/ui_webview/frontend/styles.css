@@ -503,6 +503,10 @@ body.view-main .window-card > .result-card {
   min-height: 0;
 }
 
+body.view-main .window-card:not(.no-result) > .input-card {
+  flex: 0 0 auto;
+}
+
 body.view-main .window-card.no-result > .input-card {
   flex: 0 0 auto;
 }
@@ -578,6 +582,26 @@ body.view-main .source-textarea::placeholder {
   color: #7a8aa2;
 }
 
+body.view-main[data-main-resizing="1"] .source-textarea,
+body.view-main[data-main-resizing="1"] .result-scroll {
+  overflow: hidden !important;
+}
+
+/* Keep input area stable while main window animates height expansion. */
+body.view-main[data-main-resizing="1"] .window-card > .input-card {
+  flex: 0 0 auto;
+}
+
+body.view-main[data-main-resizing="1"] .input-shell {
+  flex: 0 0 auto;
+}
+
+body.view-main[data-main-resizing="1"] .source-textarea {
+  height: 112px;
+  min-height: 112px;
+  max-height: 112px;
+}
+
 .input-shell {
   border-radius: 18px;
   border: 1px solid var(--stroke-soft);
@@ -600,6 +624,16 @@ body.view-main .window-card.no-result .input-shell {
 }
 
 body.view-main .window-card.no-result .source-textarea {
+  height: 112px;
+  min-height: 112px;
+  max-height: 112px;
+}
+
+body.view-main .window-card:not(.no-result) .input-shell {
+  flex: 0 0 auto;
+}
+
+body.view-main .window-card:not(.no-result) .source-textarea {
   height: 112px;
   min-height: 112px;
   max-height: 112px;
@@ -653,6 +687,10 @@ body.view-main .result-card {
   border-width: 0;
   padding-top: 0;
   padding-bottom: 0;
+}
+
+body.view-main .window-card.no-result .result-card {
+  transition: none;
 }
 
 .result-pane {
@@ -911,10 +949,27 @@ body.view-main .ghost-button {
 .zoom-modal {
   position: fixed;
   inset: 0;
+}
+
+.side-sheet {
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 170ms ease, visibility 0s linear 170ms;
+}
+
+.side-sheet.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 170ms ease;
+}
+
+.zoom-modal {
   display: none;
 }
 
-.side-sheet.open,
 .zoom-modal.open {
   display: block;
 }
@@ -925,6 +980,15 @@ body.view-main .ghost-button {
   inset: 0;
   background: rgba(7, 10, 16, 0.28);
   backdrop-filter: blur(8px);
+}
+
+.side-sheet .sheet-backdrop {
+  opacity: 0;
+  transition: opacity 170ms ease;
+}
+
+.side-sheet.open .sheet-backdrop {
+  opacity: 1;
 }
 
 .zoom-modal .modal-backdrop {
@@ -967,6 +1031,14 @@ body.view-main .modal-panel {
   flex-direction: column;
   gap: 10px;
   position: relative;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: transform 190ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease;
+}
+
+.side-sheet.open .sheet-panel {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .history-sheet-panel {
