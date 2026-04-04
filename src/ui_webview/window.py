@@ -136,6 +136,7 @@ class WordPackWebviewApp:
         self._fb_last_lbtn_up_at = 0.0
         self._fb_lbtn_click_count = 0
         self._fb_last_ctrl_down = False
+        self._fb_ctrl_combo_used = False
         self._fb_last_escape_down = False
         self._fb_last_ctrl_tap_at = 0.0
         self._fb_last_combo_s = False
@@ -2031,6 +2032,7 @@ class WordPackWebviewApp:
             if (
                 self.config.interaction.selection_enabled
                 and self.config.interaction.selection_trigger_mode == "double_ctrl"
+                and not self._is_our_window_foreground()
             ):
                 self._translate_pending_selection()
             return
@@ -2248,6 +2250,30 @@ class WordPackWebviewApp:
             return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
         return fallback
 
+    def _window_hwnd(self, window) -> int | None:
+        native = getattr(window, "native", None) if window is not None else None
+        handle = getattr(native, "Handle", None)
+        if handle is None:
+            return None
+        try:
+            return int(handle.ToInt32())
+        except Exception:
+            return None
+
+    def _is_our_window_foreground(self) -> bool:
+        try:
+            foreground_hwnd = int(ctypes.windll.user32.GetForegroundWindow())
+        except Exception:
+            return False
+        if foreground_hwnd <= 0:
+            return False
+
+        for window in (self.main_window, self.bubble_window, self.icon_window, self.overlay_window):
+            hwnd = self._window_hwnd(window)
+            if hwnd and hwnd == foreground_hwnd:
+                return True
+        return False
+
     def _is_cursor_inside_bubble(self) -> bool:
         with self.lock:
             window = self.bubble_window
@@ -2350,6 +2376,23 @@ class WordPackWebviewApp:
             return False
         return bool(key_state_getter(vk) & 0x8000)
 
+    @staticmethod
+    def _ctrl_combo_in_progress(key_state_getter) -> bool:
+        combo_vks = (
+            # Common editing and navigation shortcuts.
+            0x08, 0x09, 0x0D, 0x1B, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E,
+            # 0-9
+            *range(0x30, 0x3A),
+            # A-Z
+            *range(0x41, 0x5B),
+            # Function keys
+            *range(0x70, 0x7C),
+        )
+        for vk in combo_vks:
+            if key_state_getter(vk) & 0x8000:
+                return True
+        return False
+
     def _auto_close_bubble_if_allowed(self) -> None:
         with self.lock:
             if self.bubble_window is None or self._bubble_state.pinned:
@@ -2434,13 +2477,21 @@ class WordPackWebviewApp:
                     self._fb_lbtn_down_pos = None
 
                 if ctrl_down and not self._fb_last_ctrl_down:
-                    if now - self._fb_last_ctrl_tap_at <= 0.35:
+                    self._fb_ctrl_combo_used = False
+
+                if ctrl_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
+                    self._fb_ctrl_combo_used = True
+
+                if self._fb_last_ctrl_down and not ctrl_down:
+                    if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
                         if (
                             self.config.interaction.selection_enabled
                             and self.config.interaction.selection_trigger_mode == "double_ctrl"
+                            and not self._is_our_window_foreground()
                         ):
                             self._translate_pending_selection()
-                    self._fb_last_ctrl_tap_at = now
+                    if not self._fb_ctrl_combo_used:
+                        self._fb_last_ctrl_tap_at = now
 
                 combo_s = False
                 if self.config.interaction.screenshot_enabled:

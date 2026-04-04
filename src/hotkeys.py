@@ -16,6 +16,8 @@ WM_QUIT = 0x0012
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
+WM_KEYUP = 0x0101
+WM_SYSKEYUP = 0x0105
 VK_LCONTROL = 0xA2
 VK_RCONTROL = 0xA3
 
@@ -124,6 +126,8 @@ class HotkeyManager:
         self._keyboard_hook = None
         self._keyboard_proc = None
         self._last_ctrl_at = 0.0
+        self._ctrl_pressed: set[int] = set()
+        self._ctrl_combo_used = False
         self._registered_hotkeys: list[int] = []
 
     def start(self) -> None:
@@ -187,13 +191,26 @@ class HotkeyManager:
         self._registered_hotkeys.clear()
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
-        if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+        if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):
             kb = cast(l_param, POINTER(KBDLLHOOKSTRUCT)).contents
-            if kb.vkCode in (VK_LCONTROL, VK_RCONTROL):
-                now = time.time()
-                if now - self._last_ctrl_at <= 0.35:
-                    self.callback("double_ctrl_selection", None)
-                self._last_ctrl_at = now
+            is_key_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
+            is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
+
+            if is_key_down and is_ctrl:
+                if not self._ctrl_pressed:
+                    self._ctrl_combo_used = False
+                self._ctrl_pressed.add(int(kb.vkCode))
+            elif is_key_down and not is_ctrl:
+                if self._ctrl_pressed:
+                    self._ctrl_combo_used = True
+            elif not is_key_down and is_ctrl:
+                self._ctrl_pressed.discard(int(kb.vkCode))
+                if not self._ctrl_pressed:
+                    if not self._ctrl_combo_used:
+                        now = time.time()
+                        if now - self._last_ctrl_at <= 0.35:
+                            self.callback("double_ctrl_selection", None)
+                        self._last_ctrl_at = now
+                    self._ctrl_combo_used = False
 
         return user32.CallNextHookEx(self._keyboard_hook, n_code, w_param, l_param)
-
