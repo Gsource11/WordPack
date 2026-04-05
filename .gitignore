@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.db
+data/
 data/config.json
 data/webview/
 data/frontend/
