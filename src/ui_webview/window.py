@@ -296,10 +296,15 @@ class WordPackWebviewApp:
     def get_config(self) -> AppConfig:
         return self.config
 
+    @staticmethod
+    def _normalize_translation_mode(mode: str | None) -> str:
+        value = str(mode or "dictionary").strip().lower()
+        return value if value in {"dictionary", "ai"} else "dictionary"
+
     def _initial_status(self) -> str:
-        if self.config.translation_mode == "ai":
+        if self._normalize_translation_mode(self.config.translation_mode) == "ai":
             return "已切换到 AI 模式"
-        return self.service.offline_diagnostics()
+        return self.service.dictionary_diagnostics()
 
     def _resolved_theme_mode(self, theme_mode: str | None = None) -> str:
         current = str(theme_mode if theme_mode is not None else self.config.theme_mode or "system").strip().lower()
@@ -871,7 +876,9 @@ class WordPackWebviewApp:
         }
 
     def _serialize_config(self) -> dict[str, Any]:
-        return asdict(self.config)
+        payload = asdict(self.config)
+        payload["translation_mode"] = self._normalize_translation_mode(payload.get("translation_mode"))
+        return payload
 
     @staticmethod
     def _history_source_kind_from_action(action: str) -> str:
@@ -905,7 +912,7 @@ class WordPackWebviewApp:
             tab = "recent"
         q = str(args.get("q", "") or "").strip()
         mode = str(args.get("mode", "all") or "all").strip().lower()
-        if mode not in {"all", "argos", "ai"}:
+        if mode not in {"all", "dictionary", "ai"}:
             mode = "all"
         direction = str(args.get("direction", "all") or "all").strip()
         source_kind = str(args.get("source_kind", "all") or "all").strip().lower()
@@ -948,23 +955,21 @@ class WordPackWebviewApp:
         return {"ok": bool(ok), "id": int(record_id)}
 
     def get_settings_payload(self, probe_runtime: bool = False) -> dict[str, Any]:
-        offline_status = self.service.offline_status(probe=probe_runtime)
-        offline_ready = bool(offline_status.get("runtime_ready", False))
+        dictionary_status = self.service.dictionary_status(probe=probe_runtime)
+        dictionary_ready = bool(dictionary_status.get("runtime_ready", False))
         return {
             "config": self._serialize_config(),
-            "offlineModels": list(offline_status.get("models", [])) if offline_ready else [],
-            "offlineRuntimeReady": offline_ready,
-            "offlineRuntimeHint": str(offline_status.get("runtime_hint", "")),
-            "offlineDiagnostics": str(offline_status.get("diagnostics", "")),
+            "dictionaryModels": list(dictionary_status.get("models", [])) if dictionary_ready else [],
+            "dictionaryRuntimeReady": dictionary_ready,
+            "dictionaryRuntimeHint": str(dictionary_status.get("runtime_hint", "")),
+            "dictionaryDiagnostics": str(dictionary_status.get("diagnostics", "")),
             "effectiveTheme": self._resolved_theme_mode(),
             "historyFilters": self._history_filters_payload(),
         }
 
     def set_translation_mode(self, mode: str) -> dict[str, Any]:
         with self.lock:
-            value = str(mode or "").strip().lower()
-            if value not in {"argos", "ai"}:
-                value = "argos"
+            value = self._normalize_translation_mode(mode)
             if value == "ai" and not self._ai_available:
                 message = "AI 不可用，请先配置并测试连接"
                 self.set_status(message)
@@ -977,8 +982,8 @@ class WordPackWebviewApp:
                 self._bubble_state.candidate_items = []
             self.config_store.save(self.config)
 
-        if value == "argos":
-            self.set_status(self.service.offline_diagnostics())
+        if value == "dictionary":
+            self.set_status(self.service.dictionary_diagnostics())
         else:
             self.set_status("已切换到 AI 模式")
 
@@ -1072,21 +1077,21 @@ class WordPackWebviewApp:
     def cycle_direction(self) -> dict[str, Any]:
         options = ["auto", "en->zh", "zh->en"]
         with self.lock:
-            current = str(self.config.offline.preferred_direction or "auto").strip() or "auto"
+            current = str(self.config.dictionary.preferred_direction or "auto").strip() or "auto"
             if current not in options:
                 current = "auto"
             next_value = options[(options.index(current) + 1) % len(options)]
-            self.config.offline.preferred_direction = next_value
+            self.config.dictionary.preferred_direction = next_value
             self.ui_state.direction = self._direction_label(next_value)
             self.config_store.save(self.config)
 
-        self.set_status(f"离线方向已切换: {next_value}")
+        self.set_status(f"词典方向已切换: {next_value}")
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
         return payload
 
     def _direction_label(self, value: str | None = None) -> str:
-        current = str(value if value is not None else self.config.offline.preferred_direction or "auto").strip() or "auto"
+        current = str(value if value is not None else self.config.dictionary.preferred_direction or "auto").strip() or "auto"
         return "方向: 自动" if current == "auto" else f"方向: {current}"
 
     def _config_event_payload(self) -> dict[str, Any]:
@@ -1145,7 +1150,70 @@ class WordPackWebviewApp:
         if notify:
             self.bridge.send("main", "status", {"text": text})
 
-    def _cancel_active_translation(self, message: str = "Translation cancelled") -> bool:
+    @staticmethod
+    def _http_status_from_message(message: str) -> int | None:
+        match = re.search(r"\bHTTP\s+(\d{3})\b", message, flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    def _user_friendly_message(self, message: str, *, scene: str = "general") -> str:
+        raw = str(message or "").strip()
+        if not raw:
+            return "操作失败，请稍后重试。"
+
+        lowered = raw.lower()
+        http_code = self._http_status_from_message(raw)
+
+        if http_code in {401, 403}:
+            return "连接失败：认证未通过，请检查 API Key。"
+        if http_code == 404:
+            return "连接失败：地址或模型不存在，请检查设置。"
+        if http_code and http_code >= 500:
+            return "服务暂时不可用，请稍后重试。"
+        if http_code and http_code >= 400:
+            return "请求失败，请检查设置后重试。"
+
+        if "请求超时" in raw or "timeout" in lowered or "timed out" in lowered:
+            return "连接超时，请稍后重试。"
+        if "网络错误" in raw or "urlerror" in lowered or "connection refused" in lowered:
+            return "网络连接失败，请检查网络或服务地址。"
+        if "api key" in lowered:
+            return "请在设置中填写正确的 API Key。"
+        if "ai 配置不完整" in raw or "配置不完整" in raw:
+            return "请先在设置中填写 AI 地址和模型。"
+        if "模式切换失败" in raw:
+            return "切换失败，请稍后重试。"
+        if "候选解析失败" in raw or "候选数量不足" in raw:
+            return "候选生成失败，请重试一次。"
+        if "openai兼容接口失败" in lowered or "ollama原生接口失败" in lowered or "ollama 调用失败" in lowered:
+            return "AI 服务暂时不可用，请检查设置后重试。"
+        if "模型文件不存在" in raw:
+            return "导入失败：未找到模型文件。"
+        if "模型方向不可用" in raw or "未找到可用词典模型" in raw or "未找到可用词典方向" in raw:
+            return "当前词典模型不可用，请在设置中重新选择或导入模型。"
+        if "运行库" in raw:
+            return "词典翻译暂不可用，请在设置中检查词典运行环境。"
+        if "截图中未识别到可翻译文本" in raw:
+            return "没有识别到文字，请换一块更清晰的区域再试。"
+
+        if scene == "translate":
+            return "翻译失败，请稍后重试。"
+        if scene == "candidate":
+            return "候选生成失败，请稍后重试。"
+        if scene == "screenshot":
+            return "截图识别失败，请重试。"
+        if scene == "ai_test":
+            return "连接测试失败，请检查设置后重试。"
+        if scene == "dictionary_import":
+            return "导入失败，请确认模型文件可用后重试。"
+
+        return raw
+
+    def _cancel_active_translation(self, message: str = "已取消翻译") -> bool:
         with self.lock:
             req_id = self._active_translate_request_seq
             cancel_event = self._active_translate_cancel
@@ -1183,7 +1251,7 @@ class WordPackWebviewApp:
         )
 
     def cancel_translation(self) -> dict[str, Any]:
-        cancelled = self._cancel_active_translation("Translation cancelled")
+        cancelled = self._cancel_active_translation("已取消翻译")
         return {"ok": True, "cancelled": bool(cancelled)}
 
     @staticmethod
@@ -1243,7 +1311,7 @@ class WordPackWebviewApp:
     def generate_multi_candidates_from_window(self, kind: str, text: str = "", result_text: str = "") -> dict[str, Any]:
         source_text = str(text or "").strip()
         latest_result_text = str(result_text or "").strip()
-        mode = str(self.config.translation_mode or "argos")
+        mode = self._normalize_translation_mode(self.config.translation_mode or "dictionary")
         is_pending = False
         has_result = False
 
@@ -1332,7 +1400,7 @@ class WordPackWebviewApp:
                         {"reqId": req_id, "sourceText": source_text, "candidates": list(candidates)},
                     )
             except Exception as exc:
-                error_text = str(exc) or "候选生成失败"
+                error_text = self._user_friendly_message(str(exc), scene="candidate")
                 with self.lock:
                     if req_id != self._active_candidate_request_seq:
                         return
@@ -1359,8 +1427,8 @@ class WordPackWebviewApp:
     def _start_translate(self, text: str, action: str, show_bubble: bool, update_main: bool | None = None) -> dict[str, Any]:
         source_text = str(text or "").strip()
         if not source_text:
-            self.set_status("Please enter text")
-            return {"ok": False, "message": "Please enter text"}
+            self.set_status("请输入要翻译的内容")
+            return {"ok": False, "message": "请输入要翻译的内容"}
 
         with self.lock:
             previous_cancel = self._active_translate_cancel
@@ -1527,7 +1595,7 @@ class WordPackWebviewApp:
             source_text,
             result_text,
             source_kind=self._history_source_kind_from_action(action),
-            direction=str(self.config.offline.preferred_direction or "auto"),
+            direction=str(self.config.dictionary.preferred_direction or "auto"),
         )
         self._prune_history_by_policy()
         history_rows = self.get_history_rows()
@@ -1589,7 +1657,8 @@ class WordPackWebviewApp:
             self._active_translate_cancel = None
             self._active_translate_shows_bubble = False
 
-        self.set_status(message)
+        user_message = self._user_friendly_message(message, scene="translate")
+        self.set_status(user_message)
         if update_main:
             self.bridge.send(
                 "main",
@@ -1598,7 +1667,7 @@ class WordPackWebviewApp:
                     "reqId": req_id,
                     "sourceText": source_text,
                     "resultText": partial,
-                    "message": message,
+                    "message": user_message,
                     "mode": mode,
                     "action": action,
                 },
@@ -1611,16 +1680,16 @@ class WordPackWebviewApp:
                     "reqId": req_id,
                     "sourceText": source_text,
                     "resultText": partial,
-                    "message": message,
+                    "message": user_message,
                     "mode": mode,
                     "action": action,
                 },
             )
 
         if show_bubble and current_show_bubble:
-            bubble_text = partial.strip() or message
+            bubble_text = partial.strip() or user_message
             if partial.strip():
-                bubble_text = f"{partial}\n\n[生成中断] {message}"
+                bubble_text = f"{partial}\n\n[生成中断] {user_message}"
             self._update_bubble(
                 source_text,
                 bubble_text,
@@ -1632,7 +1701,7 @@ class WordPackWebviewApp:
 
     def copy_text(self, text: str) -> dict[str, Any]:
         ok = set_clipboard_text(str(text or ""))
-        message = "Copied" if ok else "Copy failed"
+        message = "已复制到剪贴板" if ok else "复制失败，请重试"
         self.set_status(message)
         return {"ok": ok, "message": message}
 
@@ -1649,7 +1718,7 @@ class WordPackWebviewApp:
         history_rows = self.get_history_rows()
         with self.lock:
             self.ui_state.history = history_rows
-        self.set_status("History cleared")
+        self.set_status("历史记录已清空")
         response = {"history": history_rows, "filters": self._history_filters_payload()}
         self.bridge.send("main", "history-updated", response)
         return response
@@ -1657,7 +1726,7 @@ class WordPackWebviewApp:
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         openai = payload.get("openai", {}) if isinstance(payload, dict) else {}
         interaction = payload.get("interaction", {}) if isinstance(payload, dict) else {}
-        offline = payload.get("offline", {}) if isinstance(payload, dict) else {}
+        dictionary = payload.get("dictionary", {}) if isinstance(payload, dict) else {}
         theme_mode = str(payload.get("theme_mode", self.config.theme_mode) or self.config.theme_mode) if isinstance(payload, dict) else self.config.theme_mode
 
         try:
@@ -1670,8 +1739,8 @@ class WordPackWebviewApp:
         self.config.openai.model = str(openai.get("model", self.config.openai.model) or "").strip()
         self.config.openai.timeout_sec = timeout_sec
 
-        preferred_direction = str(offline.get("preferred_direction", self.config.offline.preferred_direction) or "auto").strip()
-        self.config.offline.preferred_direction = preferred_direction or "auto"
+        preferred_direction = str(dictionary.get("preferred_direction", self.config.dictionary.preferred_direction) or "auto").strip()
+        self.config.dictionary.preferred_direction = preferred_direction or "auto"
 
         trigger_mode = str(interaction.get("selection_trigger_mode", self.config.interaction.selection_trigger_mode) or "icon").strip()
         if trigger_mode not in {"icon", "double_ctrl"}:
@@ -1716,10 +1785,10 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to restart hotkey manager after settings update")
 
-        if self.config.translation_mode == "argos":
-            self.set_status(self.service.offline_diagnostics())
+        if self._normalize_translation_mode(self.config.translation_mode) == "dictionary":
+            self.set_status(self.service.dictionary_diagnostics())
         else:
-            self.set_status("AI settings saved")
+            self.set_status("AI 设置已保存")
 
         response = self._config_event_payload()
         self.bridge.send("main", "config-updated", response)
@@ -1734,6 +1803,7 @@ class WordPackWebviewApp:
 
         def worker() -> None:
             ok, message = self.service.test_ai_connection()
+            message = self._user_friendly_message(message, scene="ai_test")
             with self.lock:
                 self._ai_available = bool(ok)
                 self._ai_available_checked = True
@@ -1754,11 +1824,11 @@ class WordPackWebviewApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def import_offline_model(self, window) -> dict[str, Any]:
+    def import_dictionary_model(self, window) -> dict[str, Any]:
         if window is None:
             return {"ok": False, "message": "主窗口不可用"}
-        if not self.service.offline_runtime_ready(probe=True):
-            message = self.service.offline_runtime_hint(probe=True)
+        if not self.service.dictionary_runtime_ready(probe=True):
+            message = self.service.dictionary_runtime_hint(probe=True)
             self.set_status(message)
             return {"ok": False, "message": message}
 
@@ -1766,36 +1836,36 @@ class WordPackWebviewApp:
             selected = window.create_file_dialog(
                 webview.OPEN_DIALOG,
                 allow_multiple=False,
-                file_types=("Argos model (*.argosmodel)",),
+                file_types=("词典模型 (*.argosmodel)",),
             )
         except Exception as exc:
-            message = f"无法打开文件选择器: {exc}"
+            message = f"无法打开文件选择窗口，请重试（{exc}）"
             self.set_status(message)
             return {"ok": False, "message": message}
 
         if not selected:
-            return {"ok": False, "message": "Import cancelled"}
+            return {"ok": False, "message": "已取消导入"}
 
         file_path = selected[0] if isinstance(selected, (list, tuple)) else selected
-        self.set_status("正在导入离线模型...")
+        self.set_status("正在导入词典模型...")
 
         def worker() -> None:
             try:
-                message = self.service.import_offline_model(str(file_path))
+                message = self.service.import_dictionary_model(str(file_path))
                 self.set_status(message)
                 payload = self._config_event_payload()
-                self.bridge.send("main", "offline-models-updated", payload)
+                self.bridge.send("main", "dictionary-models-updated", payload)
             except Exception as exc:
-                message = str(exc)
-                self.set_status(f"离线模型导入失败: {message}")
-                self.bridge.send("main", "offline-model-import-error", {"message": message})
+                message = self._user_friendly_message(str(exc), scene="dictionary_import")
+                self.set_status(message)
+                self.bridge.send("main", "dictionary-model-import-error", {"message": message})
 
         threading.Thread(target=worker, daemon=True).start()
-        return {"ok": True, "message": "started"}
+        return {"ok": True, "message": "已开始导入"}
 
     def start_screenshot_capture(self, show_bubble: bool) -> dict[str, Any]:
         if self.overlay_window is not None:
-            return {"ok": False, "message": "Screenshot capture is already running"}
+            return {"ok": False, "message": "截图已在进行中"}
 
         main_hidden_before = self.hidden
         if self.main_window is not None and not self.hidden:
@@ -1854,13 +1924,13 @@ class WordPackWebviewApp:
         self.overlay_window = None
         self._restore_main_after_screenshot()
         self._screenshot_session = None
-        self.set_status("Screenshot cancelled")
+        self.set_status("已取消截图")
         return {"ok": True}
 
     def finish_screenshot_selection(self, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._screenshot_session
         if session is None:
-            return {"ok": False, "message": "Screenshot session not found"}
+            return {"ok": False, "message": "截图会话不存在，请重新开始截图"}
 
         if self.overlay_window is not None:
             try:
@@ -1917,7 +1987,7 @@ class WordPackWebviewApp:
                     self.bridge.send("main", "screenshot-ocr-ready", {"sourceText": text})
                 self._start_translate(text=text, action="截图翻译", show_bubble=session.show_bubble)
             except Exception as exc:
-                message = str(exc)
+                message = self._user_friendly_message(str(exc), scene="screenshot")
                 self.set_status(message)
                 self.bridge.send("main", "screenshot-ocr-error", {"message": message})
                 if session.show_bubble:
@@ -2105,9 +2175,9 @@ class WordPackWebviewApp:
 
         if self._bubble_state.pinned:
             self._cancel_bubble_hide_timer()
-            self.set_status("Bubble pinned")
+            self.set_status("已固定悬浮窗")
         else:
-            self.set_status("Bubble unpinned")
+            self.set_status("已取消固定悬浮窗")
             if not self._bubble_state.pending:
                 self._schedule_bubble_auto_hide()
 
@@ -2192,7 +2262,7 @@ class WordPackWebviewApp:
 
         text = candidate.text.strip() or self._capture_selected_text(candidate.payload).strip()
         if not text:
-            message = "No translatable text detected"
+            message = "未识别到可翻译文本，请重新划词后再试"
             self.set_status(message)
             self._show_bubble(
                 source_text="划词翻译",

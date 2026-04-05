@@ -17,7 +17,7 @@ class OpenAIConfig:
 
 
 @dataclass
-class OfflineConfig:
+class DictionaryConfig:
     preferred_direction: str = "auto"
 
 
@@ -38,10 +38,10 @@ class HistoryConfig:
 
 @dataclass
 class AppConfig:
-    translation_mode: str = "argos"
+    translation_mode: str = "dictionary"
     theme_mode: str = "system"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
-    offline: OfflineConfig = field(default_factory=OfflineConfig)
+    dictionary: DictionaryConfig = field(default_factory=DictionaryConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
 
@@ -50,6 +50,11 @@ class ConfigStore:
     def __init__(self, config_path: Path) -> None:
         self.config_path = config_path
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _normalize_translation_mode(value: str | None) -> str:
+        mode = str(value or "dictionary").strip().lower()
+        return mode if mode in {"dictionary", "ai"} else "dictionary"
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
@@ -61,7 +66,7 @@ class ConfigStore:
             raw = json.load(f)
 
         openai_raw = raw.get("openai", {})
-        offline_raw = raw.get("offline", {})
+        dictionary_raw = raw.get("dictionary", {})
         interaction_raw = raw.get("interaction", {})
         history_raw = raw.get("history", {})
 
@@ -70,7 +75,7 @@ class ConfigStore:
         legacy_screenshot_enabled = interaction_raw.get("screenshot_hotkey_enabled", True)
 
         cfg = AppConfig(
-            translation_mode=str(raw.get("translation_mode", "argos") or "argos").strip().lower(),
+            translation_mode=self._normalize_translation_mode(raw.get("translation_mode", "dictionary")),
             theme_mode=str(raw.get("theme_mode", "system") or "system"),
             openai=OpenAIConfig(
                 base_url=openai_raw.get("base_url", "https://api.openai.com/v1"),
@@ -81,8 +86,8 @@ class ConfigStore:
                 multi_candidate_short_cn_max_chars=int(openai_raw.get("multi_candidate_short_cn_max_chars", 24) or 24),
                 multi_candidate_short_en_max_words=int(openai_raw.get("multi_candidate_short_en_max_words", 12) or 12),
             ),
-            offline=OfflineConfig(
-                preferred_direction=offline_raw.get("preferred_direction", "auto"),
+            dictionary=DictionaryConfig(
+                preferred_direction=dictionary_raw.get("preferred_direction", "auto"),
             ),
             interaction=InteractionConfig(
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
@@ -103,13 +108,12 @@ class ConfigStore:
             ),
         )
 
-        if cfg.translation_mode not in {"argos", "ai"}:
-            cfg.translation_mode = "argos"
+        cfg.translation_mode = self._normalize_translation_mode(cfg.translation_mode)
         if cfg.theme_mode not in {"system", "light", "dark"}:
             cfg.theme_mode = "system"
 
-        if not cfg.offline.preferred_direction:
-            cfg.offline.preferred_direction = "auto"
+        if not cfg.dictionary.preferred_direction:
+            cfg.dictionary.preferred_direction = "auto"
 
         if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl"}:
             cfg.interaction.selection_trigger_mode = "icon"
@@ -126,5 +130,6 @@ class ConfigStore:
         return cfg
 
     def save(self, config: AppConfig) -> None:
+        config.translation_mode = self._normalize_translation_mode(config.translation_mode)
         with self.config_path.open("w", encoding="utf-8") as f:
             json.dump(asdict(config), f, ensure_ascii=False, indent=2)

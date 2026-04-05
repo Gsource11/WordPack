@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -11,8 +10,8 @@ from urllib import error, parse, request
 from .config import AppConfig
 
 
-class ArgosOfflineTranslator:
-    """Argos Translate backend with install/list/select capabilities."""
+class DictionaryEngine:
+    """Dictionary translation backend with install/list/select capabilities."""
 
     def __init__(self) -> None:
         self._translate_mod = None
@@ -28,11 +27,11 @@ class ArgosOfflineTranslator:
 
         self._import_attempted = True
         try:
-            import argostranslate.package as argos_package  # type: ignore
-            import argostranslate.translate as argos_translate  # type: ignore
+            import argostranslate.package as package_mod  # type: ignore
+            import argostranslate.translate as translate_mod  # type: ignore
 
-            self._translate_mod = argos_translate
-            self._package_mod = argos_package
+            self._translate_mod = translate_mod
+            self._package_mod = package_mod
             self._init_error = ""
             return True
         except Exception as exc:
@@ -142,7 +141,7 @@ class ArgosOfflineTranslator:
 
     def install_model_file(self, model_path: str) -> str:
         if not self._ensure_runtime() or self._package_mod is None:
-            raise RuntimeError("离线模型功能不可用：当前构建未包含 argostranslate 运行库。请使用发布版 exe。")
+            raise RuntimeError("词典模型功能暂不可用，请使用发布版程序。")
 
         path = Path(model_path)
         if not path.exists() or not path.is_file():
@@ -150,7 +149,7 @@ class ArgosOfflineTranslator:
 
         self._package_mod.install_from_path(str(path))
         count = len(self.list_directions())
-        return f"模型导入成功，当前可用离线方向: {count}"
+        return f"模型导入成功，当前可用词典方向: {count}"
 
     @staticmethod
     def _basic_split_sentences(text: str) -> list[str]:
@@ -158,10 +157,10 @@ class ArgosOfflineTranslator:
         cleaned = [p.strip() for p in parts if p and p.strip()]
         return cleaned if cleaned else [text]
 
-    def _attach_offline_sentencizer(self, translation_obj: Any) -> None:
-        class _OfflineSentencizer:
+    def _attach_dictionary_sentencizer(self, translation_obj: Any) -> None:
+        class _DictionarySentencizer:
             def split_sentences(self, text: str):
-                return ArgosOfflineTranslator._basic_split_sentences(text)
+                return DictionaryEngine._basic_split_sentences(text)
 
         package_translation = translation_obj
         underlying = getattr(translation_obj, "underlying", None)
@@ -169,7 +168,7 @@ class ArgosOfflineTranslator:
             package_translation = underlying
 
         if hasattr(package_translation, "sentencizer"):
-            package_translation.sentencizer = _OfflineSentencizer()
+            package_translation.sentencizer = _DictionarySentencizer()
 
     def _select_translation(self, text: str, preferred_direction: str):
         selected = None
@@ -179,7 +178,7 @@ class ArgosOfflineTranslator:
             if len(parts) == 2:
                 selected = self._find_translation(parts[0].strip(), parts[1].strip())
                 if selected is None:
-                    raise RuntimeError(f"所选离线模型方向不可用: {preferred_direction}")
+                    raise RuntimeError(f"所选词典方向不可用: {preferred_direction}")
 
         if selected is None:
             source_code = "zh" if self._contains_chinese(text) else "en"
@@ -187,18 +186,18 @@ class ArgosOfflineTranslator:
             selected = self._find_translation(source_code, target_code)
 
         if selected is None:
-            raise RuntimeError(f"未找到可用离线模型方向: {source_code}->{target_code}")
+            raise RuntimeError(f"未找到可用词典方向: {source_code}->{target_code}")
 
-        self._attach_offline_sentencizer(selected)
+        self._attach_dictionary_sentencizer(selected)
         return selected
 
     def translate(self, text: str, preferred_direction: str = "auto") -> str:
         if not self._ensure_runtime() or self._translate_mod is None:
-            raise RuntimeError("未安装 argostranslate")
+            raise RuntimeError("词典翻译运行环境不可用")
 
         translation = self._select_translation(text, preferred_direction)
         if translation is None:
-            raise RuntimeError("未找到可用离线翻译模型")
+            raise RuntimeError("未找到可用词典模型")
 
         chunks = self._split_text(text)
         translated_chunks: list[str] = []
@@ -210,52 +209,43 @@ class ArgosOfflineTranslator:
         return "".join(translated_chunks).strip()
 
 
-class OfflineTranslator:
+class DictionaryTranslator:
     def __init__(self, cfg_getter, status_cache_path: Path | None = None) -> None:
         self.cfg_getter = cfg_getter
-        self.argos = ArgosOfflineTranslator()
+        self.engine = DictionaryEngine()
         self._status_cache_path = Path(status_cache_path) if status_cache_path else None
         self._status_cache: dict[str, Any] | None = None
         self._load_status_cache_from_disk()
 
     def _preferred_direction(self) -> str:
         cfg: AppConfig = self.cfg_getter()
-        value = str(getattr(cfg.offline, "preferred_direction", "auto") or "auto").strip()
+        value = str(getattr(cfg.dictionary, "preferred_direction", "auto") or "auto").strip()
         return value or "auto"
 
     def _runtime_hint_from_status(self, runtime_ready: bool, probe: bool) -> str:
         if runtime_ready:
-            return "离线模型运行库已就绪"
-        if not probe and not self.argos.import_attempted():
-            return "离线模型运行库将按需检测；打开设置页或首次使用离线模型时再加载。"
-
-        exe = sys.executable
-        err = self.argos.init_error()
-        suffix = f"；底层异常: {err}" if err else ""
-        return (
-            "当前解释器未加载到 argostranslate。"
-            f"当前解释器: {exe}。"
-            "请用同一解释器执行安装命令: `\"<python>\" -m pip install -r requirements.txt`。"
-            f"{suffix}"
-        )
+            return "词典翻译已准备就绪"
+        if not probe and not self.engine.import_attempted():
+            return "词典翻译将在需要时自动检测。"
+        return "词典翻译暂不可用，请安装依赖或使用发布版。"
 
     def _diagnostics_from_status(self, runtime_ready: bool, items: list[dict[str, str]], probe: bool) -> str:
         preferred = self._preferred_direction()
-        if not probe and not self.argos.import_attempted():
-            return "Argos 运行库将按需检测；首次翻译或打开设置页时再加载。"
+        if not probe and not self.engine.import_attempted():
+            return "词典翻译将在首次使用时自动检测。"
 
         if not runtime_ready:
-            return "Argos 运行库缺失，请安装依赖或使用发布版。"
+            return "词典翻译暂不可用，请安装依赖或使用发布版。"
 
         if not items:
-            return "Argos 已就绪，但未检测到模型，请导入 .argosmodel 文件。"
+            return "已启用词典翻译，但还没有可用模型，请先导入模型。"
 
         if preferred != "auto":
             if any(item["direction"] == preferred for item in items):
-                return f"Argos 已启用，当前固定方向 {preferred}"
+                return f"词典翻译已启用，当前固定方向：{preferred}"
             return f"已配置 {preferred}，但该方向模型不可用，当前将自动匹配。"
 
-        return "Argos 已启用（自动匹配方向）"
+        return "词典翻译已启用（自动匹配方向）"
 
     def _invalidate_status_cache(self) -> None:
         self._status_cache = None
@@ -319,8 +309,8 @@ class OfflineTranslator:
                     "models": list(cached.get("models", [])),
                 }
 
-        runtime_ready = bool(self.argos.runtime_ready(probe=probe))
-        models = self.argos.list_directions() if runtime_ready else []
+        runtime_ready = bool(self.engine.runtime_ready(probe=probe))
+        models = self.engine.list_directions() if runtime_ready else []
         hint = self._runtime_hint_from_status(runtime_ready, probe=probe)
         diagnostics = self._diagnostics_from_status(runtime_ready, models, probe=probe)
 
@@ -332,7 +322,7 @@ class OfflineTranslator:
             "models": list(models),
         }
 
-        persistable = probe or self.argos.import_attempted() or runtime_ready or bool(models)
+        persistable = probe or self.engine.import_attempted() or runtime_ready or bool(models)
         if persistable:
             self._status_cache = status_payload
             self._persist_status_cache()
@@ -356,7 +346,7 @@ class OfflineTranslator:
         return self.status(probe=probe)["models"]
 
     def import_model_file(self, model_path: str) -> str:
-        result = self.argos.install_model_file(model_path)
+        result = self.engine.install_model_file(model_path)
         self._invalidate_status_cache()
         self.refresh_status(probe=True)
         return result
@@ -376,16 +366,16 @@ class OfflineTranslator:
             return ""
 
         if not self.runtime_ready(probe=True):
-            return "[Argos 运行库未就绪，请先安装依赖或使用发布版。]"
+            return "[词典翻译暂不可用，请先安装依赖或使用发布版。]"
 
-        items = self.argos.list_directions()
+        items = self.engine.list_directions()
         if not items:
-            return "[未检测到 Argos 模型，请先导入 .argosmodel 文件。]"
+            return "[未检测到词典模型，请先在设置中导入模型。]"
 
         try:
-            return self.argos.translate(normalized, self._preferred_direction())
+            return self.engine.translate(normalized, self._preferred_direction())
         except Exception as exc:
-            return f"[Argos 翻译失败: {exc}]"
+            return f"[词典翻译失败: {exc}]"
 
 
 class PartialStreamError(RuntimeError):
@@ -782,10 +772,10 @@ class OpenAICompatibleTranslator:
         timeout_sec = max(5, int(cfg.openai.timeout_sec))
 
         if not base_url or not model:
-            raise ValueError("AI 配置不完整，请先在设置中填写 Base URL / Model")
+            raise ValueError("请先在设置中填写 AI 服务地址和模型。")
 
         if not api_key and not self._is_local_base_url(base_url):
-            raise ValueError("远程 AI 服务通常需要 API Key")
+            raise ValueError("当前服务需要 API Key，请先填写。")
 
         if purpose == "test":
             candidates = [min(max(timeout_sec, 8), 25)]
@@ -831,14 +821,14 @@ class OpenAICompatibleTranslator:
             except Exception as ollama_exc:
                 if self._is_timeout_text(str(ollama_exc)):
                     raise RuntimeError(
-                        f"Ollama 推理超时（{candidates[-1]}s）。请在设置中提高 Timeout、先执行 `ollama run {model}` 预热，或切换更小模型。"
+                        f"AI 响应超时（{candidates[-1]} 秒），请稍后重试或提高超时时间。"
                     ) from ollama_exc
                 try:
                     return try_openai()
                 except PartialStreamError as openai_exc:
                     raise RuntimeError(str(openai_exc)) from openai_exc
                 except Exception as openai_exc:
-                    raise RuntimeError(f"Ollama原生接口失败: {ollama_exc} | OpenAI兼容接口失败: {openai_exc}") from openai_exc
+                    raise RuntimeError("AI 服务暂时不可用，请检查设置后重试。") from openai_exc
 
         openai_err: Exception | None = None
         try:
@@ -854,8 +844,8 @@ class OpenAICompatibleTranslator:
             raise RuntimeError(str(exc)) from exc
         except Exception as ollama_exc:
             if openai_err:
-                raise RuntimeError(f"OpenAI兼容接口失败: {openai_err} | Ollama原生接口失败: {ollama_exc}") from ollama_exc
-            raise RuntimeError(f"Ollama原生接口失败: {ollama_exc}") from ollama_exc
+                raise RuntimeError("AI 服务暂时不可用，请检查设置后重试。") from ollama_exc
+            raise RuntimeError("AI 服务暂时不可用，请稍后重试。") from ollama_exc
 
     @staticmethod
     def _translation_system_prompt() -> str:
@@ -998,10 +988,10 @@ class OpenAICompatibleTranslator:
         timeout_sec = max(5, int(cfg.openai.timeout_sec))
 
         if not base_url or not model:
-            return False, "配置不完整：请填写 Base URL 和 Model"
+            return False, "请先填写 AI 服务地址和模型。"
 
         if not api_key and not self._is_local_base_url(base_url):
-            return False, "远程服务未配置 API Key"
+            return False, "请填写 API Key。"
 
         headers = self._build_headers(api_key)
 
@@ -1011,7 +1001,7 @@ class OpenAICompatibleTranslator:
             model_ids = [str(item.get("id", "")) for item in models_data.get("data", []) if isinstance(item, dict)]
             if model_ids and model not in model_ids:
                 sample = ", ".join(model_ids[:6])
-                return False, f"连接到服务成功，但模型 `{model}` 不在可用列表中。可用模型示例: {sample}"
+                return False, f"连接成功，但当前模型不可用。可用模型示例：{sample}"
         except Exception:
             pass
 
@@ -1025,22 +1015,22 @@ class OpenAICompatibleTranslator:
                 purpose="test",
             )
             if "收到" in probe:
-                return True, f"AI 连接成功，模型响应正常（{probe[:40]}）"
-            return False, f"AI 连接异常：已收到响应，但内容不符合预期（{probe[:60]}）"
+                return True, "连接成功，可以正常使用 AI 翻译。"
+            return False, "连接已建立，但模型返回内容异常，请检查模型配置。"
         except Exception as exc:
-            return False, f"AI 连接失败: {exc}"
+            return False, f"连接失败：{exc}"
 
 
 class TranslationService:
     def __init__(self, cfg_getter, data_dir: Path | None = None) -> None:
-        cache_path = (Path(data_dir) / "offline_status_cache.json") if data_dir is not None else None
-        self.offline = OfflineTranslator(cfg_getter, status_cache_path=cache_path)
+        cache_path = (Path(data_dir) / "dictionary_status_cache.json") if data_dir is not None else None
+        self.dictionary = DictionaryTranslator(cfg_getter, status_cache_path=cache_path)
         self.ai = OpenAICompatibleTranslator(cfg_getter)
 
     def translate(self, text: str, mode: str) -> str:
         if mode == "ai":
             return self.ai.translate(text)
-        return self.offline.translate(text)
+        return self.dictionary.translate(text)
 
     def translate_stream(
         self,
@@ -1051,7 +1041,7 @@ class TranslationService:
     ) -> str:
         if mode == "ai":
             return self.ai.translate_stream(text, on_delta, should_cancel=should_cancel)
-        result = self.offline.translate(text)
+        result = self.dictionary.translate(text)
         if result:
             on_delta(result)
         return result
@@ -1080,23 +1070,23 @@ class TranslationService:
     def test_ai_connection(self) -> tuple[bool, str]:
         return self.ai.test_connection()
 
-    def offline_diagnostics(self, probe: bool = False) -> str:
-        return self.offline.diagnostics(probe=probe)
+    def dictionary_diagnostics(self, probe: bool = False) -> str:
+        return self.dictionary.diagnostics(probe=probe)
 
-    def list_offline_models(self, probe: bool = False) -> list[dict[str, str]]:
-        return self.offline.list_models(probe=probe)
+    def list_dictionary_models(self, probe: bool = False) -> list[dict[str, str]]:
+        return self.dictionary.list_models(probe=probe)
 
-    def import_offline_model(self, model_path: str) -> str:
-        return self.offline.import_model_file(model_path)
+    def import_dictionary_model(self, model_path: str) -> str:
+        return self.dictionary.import_model_file(model_path)
 
-    def offline_runtime_ready(self, probe: bool = False) -> bool:
-        return self.offline.runtime_ready(probe=probe)
+    def dictionary_runtime_ready(self, probe: bool = False) -> bool:
+        return self.dictionary.runtime_ready(probe=probe)
 
-    def offline_runtime_hint(self, probe: bool = False) -> str:
-        return self.offline.runtime_hint(probe=probe)
+    def dictionary_runtime_hint(self, probe: bool = False) -> str:
+        return self.dictionary.runtime_hint(probe=probe)
 
-    def offline_status(self, probe: bool = False, force_refresh: bool = False) -> dict[str, Any]:
-        return self.offline.status(probe=probe, force_refresh=force_refresh)
+    def dictionary_status(self, probe: bool = False, force_refresh: bool = False) -> dict[str, Any]:
+        return self.dictionary.status(probe=probe, force_refresh=force_refresh)
 
 
 

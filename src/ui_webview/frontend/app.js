@@ -13,7 +13,7 @@
     themeMode: "light",
     ui: {
       status: "",
-      translation_mode: "argos",
+      translation_mode: "dictionary",
       theme_mode: "light",
       direction: "方向: 自动",
       history: [],
@@ -216,18 +216,18 @@
     return { enabled: true, tip: "生成 4 个候选译文" };
   }
 
-  function argosAvailability() {
+  function dictionaryAvailability() {
     const settings = state.settings || {};
-    const hasRuntimeFlag = typeof settings.offlineRuntimeReady === "boolean";
-    const hasModelsFlag = Array.isArray(settings.offlineModels);
+    const hasRuntimeFlag = typeof settings.dictionaryRuntimeReady === "boolean";
+    const hasModelsFlag = Array.isArray(settings.dictionaryModels);
     // Bubble view may bootstrap without settings payload; avoid false-negative disable.
     if (!hasRuntimeFlag && !hasModelsFlag) {
       return { available: true, tip: "" };
     }
-    const offlineModels = hasModelsFlag ? settings.offlineModels : [];
-    const hasOfflineModels = offlineModels.length > 0;
-    const runtimeReady = Boolean(settings.offlineRuntimeReady);
-    const available = runtimeReady && hasOfflineModels;
+    const dictionaryModels = hasModelsFlag ? settings.dictionaryModels : [];
+    const hasDictionaryModels = dictionaryModels.length > 0;
+    const runtimeReady = Boolean(settings.dictionaryRuntimeReady);
+    const available = runtimeReady && hasDictionaryModels;
     return {
       available,
       tip: available ? "" : "模式不可用，请检查配置",
@@ -244,13 +244,13 @@
 
   function modeAvailability(mode) {
     const normalized = String(mode || "").toLowerCase();
-    return normalized === "ai" ? aiAvailability() : argosAvailability();
+    return normalized === "ai" ? aiAvailability() : dictionaryAvailability();
   }
 
   function anyModeAvailable() {
-    const argos = argosAvailability();
+    const dictionary = dictionaryAvailability();
     const ai = aiAvailability();
-    return Boolean(argos.available || ai.available);
+    return Boolean(dictionary.available || ai.available);
   }
   const formatAllCandidates = (items) =>
     (Array.isArray(items) ? items : [])
@@ -945,22 +945,22 @@
   }
 
   function renderMain() {
-    const mode = state.config?.translation_mode || "argos";
+    const mode = state.config?.translation_mode || "dictionary";
     const result = state.resultText || "";
     const showResultCard = Boolean(state.pending || result);
     const mainResultClass = state.pending ? (result ? "pending-streaming" : "pending-waiting") : "";
     const mainResultContent = state.pending && !result ? skeletonMarkup("main") : escapeHtml(result);
     const historyPanel = state.historyPanel;
-    const settings = state.settings || { offlineModels: [], offlineRuntimeReady: false, offlineRuntimeHint: "" };
-    const argosModeAvailability = modeAvailability("argos");
+    const settings = state.settings || { dictionaryModels: [], dictionaryRuntimeReady: false, dictionaryRuntimeHint: "" };
+    const dictionaryModeAvailability = modeAvailability("dictionary");
     const aiModeAvailability = modeAvailability("ai");
     const translateEnabled = anyModeAvailable();
-    const offlineModels = Array.isArray(settings.offlineModels) ? settings.offlineModels : [];
-    const hasOfflineModels = offlineModels.length > 0;
-    const argosNoticeClass = (!hasOfflineModels || !settings.offlineRuntimeReady) ? "warning" : "";
-    const argosNoticeHtml = !hasOfflineModels
-      ? `未检测到已导入的 Argos 模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">Argos 模型下载页</a> 下载模型后，再点击“导入 Argos 模型”。`
-      : escapeHtml(settings.offlineRuntimeReady ? (settings.offlineDiagnostics || "Argos 运行库可用") : (settings.offlineRuntimeHint || "Argos 运行库未就绪"));
+    const dictionaryModels = Array.isArray(settings.dictionaryModels) ? settings.dictionaryModels : [];
+    const hasDictionaryModels = dictionaryModels.length > 0;
+    const dictionaryNoticeClass = (!hasDictionaryModels || !settings.dictionaryRuntimeReady) ? "warning" : "";
+    const dictionaryNoticeHtml = !hasDictionaryModels
+      ? `未检测到已导入的词典模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">词典模型下载页</a> 下载模型后，再点击“导入词典模型”。`
+      : escapeHtml(settings.dictionaryRuntimeReady ? (settings.dictionaryDiagnostics || "词典运行环境可用") : (settings.dictionaryRuntimeHint || "词典运行环境未就绪"));
     const draft = state.settingsDraft || clone(state.config || {});
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "icon";
@@ -968,7 +968,7 @@
     const screenshotHotkey = draft.interaction?.screenshot_hotkey ?? "";
     const directionOptions = Array.from(new Set([
       "auto",
-      ...(settings.offlineModels || []).map((item) => item.direction).filter(Boolean),
+      ...(settings.dictionaryModels || []).map((item) => item.direction).filter(Boolean),
     ])).map((value) => ({ value, label: value }));
     const selectionModeOptions = [
       { value: "icon", label: "图标触发" },
@@ -1023,7 +1023,7 @@
           </header>
           <div class="segmented">
             <div class="seg-track">
-              <button class="seg-btn ${mode === "argos" ? "active" : ""} ${argosModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="argos" aria-disabled="${argosModeAvailability.available ? "false" : "true"}" ${argosModeAvailability.available ? "" : `data-tooltip="${escapeHtml(argosModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
+              <button class="seg-btn ${mode === "dictionary" ? "active" : ""} ${dictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="dictionary" aria-disabled="${dictionaryModeAvailability.available ? "false" : "true"}" ${dictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(dictionaryModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
               <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>AI 翻译</span></button>
             </div>
           </div>
@@ -1087,7 +1087,7 @@
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="mode">
                       <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>全部</option>
-                      <option value="argos" ${historyPanel.mode === "argos" ? "selected" : ""}>词典</option>
+                      <option value="dictionary" ${historyPanel.mode === "dictionary" ? "selected" : ""}>词典</option>
                       <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
                     </select>
                   </span>
@@ -1187,14 +1187,14 @@
               <div class="ai-status-inline">AI 状态：${escapeHtml(aiStatusText)} · 最近检测：${escapeHtml(aiStatusTime)}</div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">Argos 模型</div>
+              <div class="setting-title">词典模型</div>
               <div class="field">
                 <label>默认方向</label>
-                ${choiceGroupMarkup("offline.preferred_direction", draft.offline?.preferred_direction || "auto", directionOptions)}
+                ${choiceGroupMarkup("dictionary.preferred_direction", draft.dictionary?.preferred_direction || "auto", directionOptions)}
               </div>
-              <div class="notice ${argosNoticeClass}">${argosNoticeHtml}</div>
+              <div class="notice ${dictionaryNoticeClass}">${dictionaryNoticeHtml}</div>
               <div class="settings-actions">
-                 <button class="ghost-button" data-action="import-offline-model">${icons.book}<span>导入 Argos 模型</span></button>
+                 <button class="ghost-button" data-action="import-dictionary-model">${icons.book}<span>导入词典模型</span></button>
               </div>
             </section>
             <section class="setting-group">
@@ -1290,7 +1290,7 @@
       candidate_pending: false,
       candidate_items: [],
     };
-    const mode = bubble.mode || "argos";
+    const mode = bubble.mode || "dictionary";
     const bubbleResultClass = bubble.pending ? ((bubble.result_text || "") ? "pending-streaming" : "pending-waiting") : "";
     const bubbleResultContent = bubble.pending && !bubble.result_text ? skeletonMarkup("bubble") : escapeHtml(bubble.result_text || "暂无结果");
     const bubbleCandidateItems = Array.isArray(bubble.candidate_items) ? bubble.candidate_items : [];
@@ -1303,7 +1303,7 @@
       aiAvailableChecked: state.aiAvailableChecked,
     });
     const bubbleModeAiEnabled = Boolean(state.aiAvailable);
-    const bubbleArgosModeAvailability = modeAvailability("argos");
+    const bubbleDictionaryModeAvailability = modeAvailability("dictionary");
     const bubbleAiModeAvailability = modeAvailability("ai");
     const bubbleCandidateDisabled = !bubbleCandidateState.enabled || bubble.candidate_pending;
     const showBubbleCandidatePane = Boolean(state.bubbleCandidatePaneOpen || bubble.candidate_pending || bubbleCandidateItems.length);
@@ -1323,7 +1323,7 @@
             <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble">${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
-              <button class="mode-chip ${mode === "argos" ? "active" : ""} ${bubbleArgosModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="argos" aria-label="词典翻译" aria-disabled="${bubbleArgosModeAvailability.available ? "false" : "true"}" ${bubbleArgosModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleArgosModeAvailability.tip)}"`}>${icons.book}</button>
+              <button class="mode-chip ${mode === "dictionary" ? "active" : ""} ${bubbleDictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="dictionary" aria-label="词典翻译" aria-disabled="${bubbleDictionaryModeAvailability.available ? "false" : "true"}" ${bubbleDictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleDictionaryModeAvailability.tip)}"`}>${icons.book}</button>
               <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
             </div>
             <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
@@ -1376,7 +1376,7 @@
     }
     applyAutoScroll("main-result");
 
-    const mode = state.config?.translation_mode || "argos";
+    const mode = state.config?.translation_mode || "dictionary";
     const candidateState = candidateAvailability({
       mode,
       sourceText: state.sourceText,
@@ -1400,19 +1400,19 @@
       candidateButton.removeAttribute("title");
     }
     const mainModeAiButton = document.querySelector('.seg-btn[data-mode="ai"]');
-    const mainModeArgosButton = document.querySelector('.seg-btn[data-mode="argos"]');
-    const argosEnabled = modeAvailability("argos").available;
+    const mainModeDictionaryButton = document.querySelector('.seg-btn[data-mode="dictionary"]');
+    const dictionaryEnabled = modeAvailability("dictionary").available;
     const aiEnabled = modeAvailability("ai").available;
-    if (mainModeArgosButton) {
-      mainModeArgosButton.classList.toggle("disabled", !argosEnabled);
-      if (argosEnabled) {
-        mainModeArgosButton.removeAttribute("title");
-        delete mainModeArgosButton.dataset.tooltip;
-        mainModeArgosButton.setAttribute("aria-disabled", "false");
+    if (mainModeDictionaryButton) {
+      mainModeDictionaryButton.classList.toggle("disabled", !dictionaryEnabled);
+      if (dictionaryEnabled) {
+        mainModeDictionaryButton.removeAttribute("title");
+        delete mainModeDictionaryButton.dataset.tooltip;
+        mainModeDictionaryButton.setAttribute("aria-disabled", "false");
       } else {
-        mainModeArgosButton.removeAttribute("title");
-        mainModeArgosButton.dataset.tooltip = "模式不可用，请检查配置";
-        mainModeArgosButton.setAttribute("aria-disabled", "true");
+        mainModeDictionaryButton.removeAttribute("title");
+        mainModeDictionaryButton.dataset.tooltip = "模式不可用，请检查配置";
+        mainModeDictionaryButton.setAttribute("aria-disabled", "true");
       }
     }
     if (mainModeAiButton) {
@@ -1481,7 +1481,7 @@
     const label = document.querySelector(".bubble-result-label");
     const result = document.querySelector(".bubble-result");
     const pin = document.querySelector(".bubble-pin");
-    const modeArgos = document.querySelector('.bubble-mode-switch [data-mode="argos"]');
+    const modeDictionary = document.querySelector('.bubble-mode-switch [data-mode="dictionary"]');
     const modeAi = document.querySelector('.bubble-mode-switch [data-mode="ai"]');
     if (!label || !result || !pin || !state.bubble) return false;
 
@@ -1494,19 +1494,19 @@
     result.classList.toggle("pending-streaming", Boolean(state.bubble.pending && state.bubble.result_text));
     result.classList.toggle("pending-waiting", Boolean(state.bubble.pending && !state.bubble.result_text));
     pin.classList.toggle("active", Boolean(state.bubble.pinned));
-    const activeMode = state.bubble.mode || "argos";
-    if (modeArgos) {
-      const argosEnabled = modeAvailability("argos").available;
-      modeArgos.classList.toggle("active", activeMode === "argos");
-      modeArgos.classList.toggle("disabled", !argosEnabled);
-      if (argosEnabled) {
-        modeArgos.removeAttribute("title");
-        delete modeArgos.dataset.tooltip;
-        modeArgos.setAttribute("aria-disabled", "false");
+    const activeMode = state.bubble.mode || "dictionary";
+    if (modeDictionary) {
+      const dictionaryEnabled = modeAvailability("dictionary").available;
+      modeDictionary.classList.toggle("active", activeMode === "dictionary");
+      modeDictionary.classList.toggle("disabled", !dictionaryEnabled);
+      if (dictionaryEnabled) {
+        modeDictionary.removeAttribute("title");
+        delete modeDictionary.dataset.tooltip;
+        modeDictionary.setAttribute("aria-disabled", "false");
       } else {
-        modeArgos.removeAttribute("title");
-        modeArgos.dataset.tooltip = "模式不可用，请检查配置";
-        modeArgos.setAttribute("aria-disabled", "true");
+        modeDictionary.removeAttribute("title");
+        modeDictionary.dataset.tooltip = "模式不可用，请检查配置";
+        modeDictionary.setAttribute("aria-disabled", "true");
       }
     }
     if (modeAi) {
@@ -1658,7 +1658,7 @@
           if (!nextMode || currentMode === nextMode) {
             break;
           }
-          if (nextMode === "argos" && !modeAvailability("argos").available) {
+          if (nextMode === "dictionary" && !modeAvailability("dictionary").available) {
             break;
           }
           if (nextMode === "ai" && !state.aiAvailable) {
@@ -1682,20 +1682,20 @@
         break;
       case "set-mode-bubble": {
         const nextMode = String(actionTarget.dataset.mode || "").trim();
-        if (!nextMode || (nextMode !== "argos" && nextMode !== "ai")) {
+        if (!nextMode || (nextMode !== "dictionary" && nextMode !== "ai")) {
           break;
         }
         const currentMode = state.config?.translation_mode || state.ui?.translation_mode || "";
         if (currentMode === nextMode) {
           break;
         }
-        if (nextMode === "argos" && !modeAvailability("argos").available) {
+        if (nextMode === "dictionary" && !modeAvailability("dictionary").available) {
           break;
         }
         if (nextMode === "ai" && !state.aiAvailable) {
           break;
         }
-        const previousBubbleMode = state.bubble?.mode || currentMode || "argos";
+        const previousBubbleMode = state.bubble?.mode || currentMode || "dictionary";
         if (state.bubble) {
           state.bubble.mode = nextMode;
           state.bubble.pending = true;
@@ -1756,9 +1756,9 @@
           break;
         }
         {
-          const currentMode = String(state.config?.translation_mode || state.ui?.translation_mode || "argos").toLowerCase();
+          const currentMode = String(state.config?.translation_mode || state.ui?.translation_mode || "dictionary").toLowerCase();
           if (!modeAvailability(currentMode).available) {
-            const fallbackMode = modeAvailability("ai").available ? "ai" : "argos";
+            const fallbackMode = modeAvailability("ai").available ? "ai" : "dictionary";
             if (fallbackMode !== currentMode) {
               const modeResp = await apiCall("set_mode", fallbackMode);
               if (modeResp && modeResp.ok === false) {
@@ -1774,7 +1774,7 @@
         break;
       case "generate-candidates-main": {
         const availability = candidateAvailability({
-          mode: state.config?.translation_mode || "argos",
+          mode: state.config?.translation_mode || "dictionary",
           sourceText: state.sourceText,
           pending: state.pending || state.candidatePending,
           hasResult: Boolean(state.resultText),
@@ -1785,7 +1785,7 @@
           showToast("warning", availability.tip || "候选生成功能不可用");
           break;
         }
-        if ((state.config?.translation_mode || "argos") !== "ai") {
+        if ((state.config?.translation_mode || "dictionary") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
             showToast("warning", modeResp.message || "模式切换失败");
@@ -1809,7 +1809,7 @@
       case "generate-candidates-bubble": {
         state.bubbleCandidatePaneOpen = true;
         const availability = candidateAvailability({
-          mode: state.bubble?.mode || state.config?.translation_mode || state.ui?.translation_mode || "argos",
+          mode: state.bubble?.mode || state.config?.translation_mode || state.ui?.translation_mode || "dictionary",
           sourceText: String(state.bubble?.source_text || "").trim(),
           pending: Boolean(state.bubble?.pending || state.bubble?.candidate_pending),
           hasResult: Boolean((state.bubble?.result_text || "").trim()),
@@ -1820,7 +1820,7 @@
           showToast("warning", availability.tip || "候选生成功能不可用");
           break;
         }
-        if ((state.config?.translation_mode || state.ui?.translation_mode || "argos") !== "ai") {
+        if ((state.config?.translation_mode || state.ui?.translation_mode || "dictionary") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
             showToast("warning", modeResp.message || "模式切换失败");
@@ -1906,8 +1906,8 @@
         rerender();
         await apiCall("test_ai_connection");
         break;
-      case "import-offline-model":
-        await apiCall("import_offline_model");
+      case "import-dictionary-model":
+        await apiCall("import_dictionary_model");
         break;
       case "ollama-defaults":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
@@ -2119,7 +2119,6 @@
         if (state.zoomPayload && state.zoomPayload.origin !== "bubble") {
           state.zoomPayload.resultText = state.resultText;
         }
-        state.notice = { type: "error", text: payload.message || "翻译失败" };
         break;
       case "translation-cancelled":
         if (!state.mainReqId || Number(payload.reqId || 0) !== state.mainReqId) {
@@ -2179,14 +2178,14 @@
         if (state.view === "main" && patchMainDynamic()) return;
         if (state.view === "bubble" && patchBubbleDynamic()) return;
         break;
-      case "offline-models-updated":
+      case "dictionary-models-updated":
         if (payload.config) state.config = payload.config;
         if (payload.settings) state.settings = payload.settings;
         state.settingsDraft = clone(state.config || {});
-        state.notice = { type: "success", text: "Argos 模型已更新" };
+        showToast("success", "词典模型已更新");
         break;
-      case "offline-model-import-error":
-        state.notice = { type: "error", text: payload.message || "模型导入失败" };
+      case "dictionary-model-import-error":
+        showToast("error", payload.message || "模型导入失败");
         break;
       case "zoom-open":
         state.zoomPayload = payload;
@@ -2207,7 +2206,7 @@
             const hasCandidateData = Boolean(nextBubble.candidate_pending || (nextBubble.candidate_items || []).length);
             if (hasCandidateData) {
               state.bubbleCandidatePaneOpen = true;
-            } else if ((nextBubble.mode || "argos") !== "ai") {
+            } else if ((nextBubble.mode || "dictionary") !== "ai") {
               state.bubbleCandidatePaneOpen = false;
             } else if (String(nextBubble.source_text || "") !== prevSource) {
               state.bubbleCandidatePaneOpen = false;
@@ -2286,7 +2285,7 @@
         if (patchMainDynamic()) return;
         break;
       case "screenshot-ocr-error":
-        state.notice = { type: "error", text: payload.message || "截图识别失败" };
+        showToast("error", payload.message || "截图识别失败");
         break;
       case "tray-open-panel":
         {

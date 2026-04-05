@@ -66,8 +66,8 @@ class WindowApi:
         self._controller.test_ai_connection()
         return {"started": True}
 
-    def import_offline_model(self) -> dict[str, Any]:
-        return self._controller.import_offline_model(self._window)
+    def import_dictionary_model(self) -> dict[str, Any]:
+        return self._controller.import_dictionary_model(self._window)
 
     def set_theme(self, theme: str) -> dict[str, Any]:
         return self._controller.set_theme(theme)

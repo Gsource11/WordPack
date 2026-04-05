@@ -90,6 +90,7 @@ class HistoryStore:
         source_kind: str = "manual",
         direction: str = "auto",
     ) -> int:
+        mode = self._normalize_mode(mode)
         source_norm = self._normalize_text(source_text)
         source_hash = self._hash_text(source_norm) if source_norm else ""
         with self._connect() as conn:
@@ -154,9 +155,13 @@ class HistoryStore:
         args: list[Any] = []
         if tab == "favorites":
             where_parts.append("favorite = 1")
-        if mode in {"argos", "ai"}:
+        normalized_mode = self._normalize_mode(mode) if mode != "all" else "all"
+        if normalized_mode == "ai":
             where_parts.append("mode = ?")
-            args.append(mode)
+            args.append("ai")
+        elif normalized_mode == "dictionary":
+            where_parts.append("mode = ?")
+            args.append("dictionary")
         if direction and direction != "all":
             where_parts.append("direction = ?")
             args.append(direction)
@@ -199,7 +204,7 @@ class HistoryStore:
                 "id": int(row["id"]),
                 "created_at": str(row["created_at"] or ""),
                 "action": str(row["action"] or ""),
-                "mode": str(row["mode"] or ""),
+                "mode": self._normalize_mode(str(row["mode"] or "")),
                 "source_kind": str(row["source_kind"] or "manual"),
                 "direction": str(row["direction"] or "auto"),
                 "source_text": str(row["source_text"] or ""),
@@ -281,3 +286,7 @@ class HistoryStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM history")
             conn.commit()
+    @staticmethod
+    def _normalize_mode(mode: str | None) -> str:
+        value = str(mode or "dictionary").strip().lower()
+        return value if value in {"dictionary", "ai"} else "dictionary"
