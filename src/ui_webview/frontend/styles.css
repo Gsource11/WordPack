@@ -1853,6 +1853,25 @@ body.view-bubble .bubble-toolbar .icon-button {
   height: 34px;
 }
 
+.mini-button.disabled,
+.icon-button.disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  filter: grayscale(0.2);
+}
+
+body.view-main .result-card .mini-button.disabled,
+body.view-main .icon-button.disabled {
+  background: #d8dde5;
+  border-color: #bcc5d1;
+  color: #8a97aa;
+}
+
+.mini-button.disabled:hover,
+.icon-button.disabled:hover {
+  transform: none;
+}
+
 .bubble-stack {
   display: flex;
   flex-direction: column;

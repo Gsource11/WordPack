@@ -195,7 +195,9 @@
     if (!canUseAi) {
       return {
         enabled: false,
-        tip: "",
+        tip: aiAvailableChecked
+          ? "AI 翻译不可用，请先在设置中检查并测试 AI 连接"
+          : "AI 状态未完成检测，请先在设置中测试 AI 连接",
       };
     }
     if (!String(sourceText || "").trim()) {
@@ -1041,7 +1043,7 @@
             <div class="card-head">
               <div class="card-title">翻译结果</div>
               <div class="result-actions">
-                <button class="mini-button ${mainCandidateDisabled ? "disabled" : ""}" id="mainCandidateBtn" data-action="generate-candidates-main">${icons.candidates}</button>
+                <button class="mini-button ${mainCandidateDisabled ? "disabled" : ""}" id="mainCandidateBtn" data-action="generate-candidates-main" aria-disabled="${mainCandidateDisabled ? "true" : "false"}" ${mainCandidateDisabled ? `data-tooltip="${escapeHtml(mainCandidateState.tip || "候选生成功能不可用")}"` : ""}>${icons.candidates}</button>
                 <button class="mini-button" data-action="open-zoom">${icons.expand}</button>
               </div>
             </div>
@@ -1320,7 +1322,7 @@
           <div class="panel-drag-hitbox" data-drag-handle="bubble-top"></div>
           <header class="bubble-header" data-drag-handle="bubble-header">
             <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.pin}</button>
-            <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble">${icons.candidates}</button>
+            <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble" aria-disabled="${bubbleCandidateDisabled ? "true" : "false"}" ${bubbleCandidateDisabled ? `data-tooltip="${escapeHtml(bubbleCandidateState.tip || "候选生成功能不可用")}"` : ""}>${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
               <button class="mode-chip ${mode === "dictionary" ? "active" : ""} ${bubbleDictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="dictionary" aria-label="词典翻译" aria-disabled="${bubbleDictionaryModeAvailability.available ? "false" : "true"}" ${bubbleDictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleDictionaryModeAvailability.tip)}"`}>${icons.book}</button>
@@ -1398,6 +1400,12 @@
       const disabled = !candidateState.enabled || state.candidatePending;
       candidateButton.classList.toggle("disabled", disabled);
       candidateButton.removeAttribute("title");
+      candidateButton.setAttribute("aria-disabled", disabled ? "true" : "false");
+      if (disabled) {
+        candidateButton.dataset.tooltip = candidateState.tip || "候选生成功能不可用";
+      } else {
+        delete candidateButton.dataset.tooltip;
+      }
     }
     const mainModeAiButton = document.querySelector('.seg-btn[data-mode="ai"]');
     const mainModeDictionaryButton = document.querySelector('.seg-btn[data-mode="dictionary"]');
@@ -1539,6 +1547,12 @@
     if (candidateBtn) {
       candidateBtn.classList.toggle("disabled", bubbleCandidateDisabled);
       candidateBtn.removeAttribute("title");
+      candidateBtn.setAttribute("aria-disabled", bubbleCandidateDisabled ? "true" : "false");
+      if (bubbleCandidateDisabled) {
+        candidateBtn.dataset.tooltip = bubbleCandidateState.tip || "候选生成功能不可用";
+      } else {
+        delete candidateBtn.dataset.tooltip;
+      }
     }
     const bubbleDisplayedCandidates = getBubbleDisplayedCandidates();
     const showBubbleCandidatePane = Boolean(
@@ -1616,6 +1630,15 @@
   async function handleClick(event) {
     const actionTarget = event.target.closest("[data-action]");
     if (!actionTarget) return;
+
+    if (
+      actionTarget.classList.contains("disabled")
+      || actionTarget.getAttribute("aria-disabled") === "true"
+      || actionTarget.hasAttribute("disabled")
+    ) {
+      event.preventDefault();
+      return;
+    }
 
     const action = actionTarget.dataset.action;
     if (["open-history", "open-settings", "close-settings", "close-history", "open-zoom", "close-zoom"].includes(action)) {
