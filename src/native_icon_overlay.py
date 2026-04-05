@@ -14,6 +14,7 @@ kernel32 = ctypes.windll.kernel32
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_LBUTTONUP = 0x0202
+WM_SETCURSOR = 0x0020
 WM_APP = 0x8000
 WM_APP_SHOW = WM_APP + 301
 WM_APP_HIDE = WM_APP + 302
@@ -35,6 +36,7 @@ SWP_NOMOVE = 0x0002
 ULW_ALPHA = 0x00000002
 AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
+IDC_ARROW = 32512
 
 BI_RGB = 0
 DIB_RGB_COLORS = 0
@@ -178,7 +180,7 @@ class NativeIconOverlay:
             wc.cbWndExtra = 0
             wc.hInstance = h_instance
             wc.hIcon = 0
-            wc.hCursor = 0
+            wc.hCursor = user32.LoadCursorW(0, ctypes.c_void_p(IDC_ARROW))
             wc.hbrBackground = 0
             wc.lpszMenuName = None
             wc.lpszClassName = self._class_name
@@ -229,6 +231,9 @@ class NativeIconOverlay:
         if msg == WM_LBUTTONUP:
             threading.Thread(target=self._safe_click, daemon=True).start()
             return 0
+        if msg == WM_SETCURSOR:
+            user32.SetCursor(user32.LoadCursorW(0, ctypes.c_void_p(IDC_ARROW)))
+            return 1
         if msg == WM_DESTROY:
             user32.PostQuitMessage(0)
             return 0
