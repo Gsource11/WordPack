@@ -30,6 +30,7 @@ class SelectionAppProfile:
 
 @dataclass
 class InteractionConfig:
+    startup_launch_enabled: bool = False
     selection_enabled: bool = True
     selection_trigger_mode: str = "icon"  # icon | double_ctrl
     selection_icon_trigger: str = "click"  # click | hover
@@ -117,6 +118,7 @@ class ConfigStore:
         history_raw = raw.get("history", {})
 
         # Backward compatibility with previous keys.
+        legacy_startup_enabled = interaction_raw.get("launch_at_startup", False)
         legacy_selection_enabled = interaction_raw.get("selection_mouse_enabled", True)
         legacy_screenshot_enabled = interaction_raw.get("screenshot_hotkey_enabled", True)
         raw_profiles = interaction_raw.get("app_profiles")
@@ -147,6 +149,7 @@ class ConfigStore:
                 timeout_sec=int(ocr_raw.get("timeout_sec", 6) or 6),
             ),
             interaction=InteractionConfig(
+                startup_launch_enabled=bool(interaction_raw.get("startup_launch_enabled", legacy_startup_enabled)),
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
                 selection_trigger_mode=str(interaction_raw.get("selection_trigger_mode", "icon") or "icon"),
                 selection_icon_trigger=str(interaction_raw.get("selection_icon_trigger", "click") or "click"),
@@ -184,6 +187,7 @@ class ConfigStore:
 
         if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl"}:
             cfg.interaction.selection_trigger_mode = "icon"
+        cfg.interaction.startup_launch_enabled = bool(cfg.interaction.startup_launch_enabled)
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()

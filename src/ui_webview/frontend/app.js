@@ -1244,6 +1244,7 @@
       ? `未检测到已导入的词典模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">词典模型下载页</a> 下载模型后，再点击“导入词典模型”。`
       : escapeHtml(settings.dictionaryRuntimeReady ? (settings.dictionaryDiagnostics || "词典运行环境可用") : (settings.dictionaryRuntimeHint || "词典运行环境未就绪"));
     const draft = state.settingsDraft || clone(state.config || {});
+    const startupEnabled = draft.interaction?.startup_launch_enabled === true;
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "icon";
     const screenshotEnabled = draft.interaction?.screenshot_enabled !== false;
@@ -1439,6 +1440,13 @@
           </div>
           <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
             ${notice}
+            <section class="setting-group">
+              <div class="setting-title">启动</div>
+              <div class="field">
+                <label class="toggle-row"><input type="checkbox" data-field="interaction.startup_launch_enabled" ${startupEnabled ? "checked" : ""}/>开机自启动</label>
+                <small>登录 Windows 后自动启动 WordPack。</small>
+              </div>
+            </section>
             <section class="setting-group">
               <div class="setting-title">外观</div>
               <div class="field">

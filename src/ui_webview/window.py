@@ -62,6 +62,8 @@ class WordPackWebviewApp:
     AI_PROBE_INTERVAL_SEC = 3600
     AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
     WEBVIEW2_RUNTIME_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    STARTUP_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    STARTUP_RUN_VALUE_NAME = "WordPack"
 
     def __init__(self) -> None:
         if getattr(sys, "frozen", False):
@@ -78,6 +80,7 @@ class WordPackWebviewApp:
 
         self.config_store = ConfigStore(self.data_dir / "config.json")
         self.config: AppConfig = self.config_store.load()
+        self._ensure_startup_launch_state()
 
         self.history = HistoryStore(self.data_dir / "history.db")
         self._prune_history_by_policy()
@@ -123,6 +126,7 @@ class WordPackWebviewApp:
             icon_path=str(tray_icon),
             on_action=self._on_tray_action,
             state_getter=lambda: {
+                "startup_launch_enabled": bool(self.config.interaction.startup_launch_enabled),
                 "selection_enabled": bool(self.config.interaction.selection_enabled),
                 "screenshot_enabled": bool(self.config.interaction.screenshot_enabled),
             },
@@ -264,6 +268,84 @@ class WordPackWebviewApp:
             except Exception:
                 continue
         return self.data_dir
+
+    def _startup_run_command(self) -> str:
+        def quote(path: Path | str) -> str:
+            value = str(path)
+            return f"\"{value.replace('\"', '\"\"')}\""
+
+        if getattr(sys, "frozen", False):
+            return quote(Path(sys.executable).resolve())
+
+        py_exe = quote(Path(sys.executable).resolve())
+        argv0 = Path(sys.argv[0]).resolve() if sys.argv else (self.base_dir / "app.py")
+        if argv0.exists() and argv0.suffix.lower() in {".py", ".pyw"}:
+            return f"{py_exe} {quote(argv0)}"
+        fallback = self.base_dir / "app.py"
+        if fallback.exists():
+            return f"{py_exe} {quote(fallback.resolve())}"
+        return py_exe
+
+    def _is_startup_enabled_in_system(self) -> bool:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                self.STARTUP_RUN_KEY_PATH,
+                0,
+                winreg.KEY_READ,
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, self.STARTUP_RUN_VALUE_NAME)
+                return bool(str(value or "").strip())
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+
+    def _set_startup_enabled_in_system(self, enabled: bool) -> bool:
+        try:
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER,
+                self.STARTUP_RUN_KEY_PATH,
+                0,
+                winreg.KEY_SET_VALUE,
+            ) as key:
+                if enabled:
+                    winreg.SetValueEx(
+                        key,
+                        self.STARTUP_RUN_VALUE_NAME,
+                        0,
+                        winreg.REG_SZ,
+                        self._startup_run_command(),
+                    )
+                else:
+                    try:
+                        winreg.DeleteValue(key, self.STARTUP_RUN_VALUE_NAME)
+                    except FileNotFoundError:
+                        pass
+            return True
+        except Exception:
+            self.logger.exception("Failed to update startup launch setting enabled=%s", bool(enabled))
+            return False
+
+    def _apply_startup_launch_enabled(self, enabled: bool) -> tuple[bool, bool]:
+        desired = bool(enabled)
+        changed = self._set_startup_enabled_in_system(desired)
+        actual = self._is_startup_enabled_in_system()
+        with self.lock:
+            self.config.interaction.startup_launch_enabled = bool(actual)
+        return bool(changed and (actual == desired)), bool(actual)
+
+    def _ensure_startup_launch_state(self) -> None:
+        desired = bool(self.config.interaction.startup_launch_enabled)
+        success, actual = self._apply_startup_launch_enabled(desired)
+        if actual != desired:
+            self.logger.warning(
+                "Startup launch state differs from config (desired=%s actual=%s success=%s)",
+                desired,
+                actual,
+                success,
+            )
+            self.config_store.save(self.config)
 
     def _has_webview2_runtime(self) -> bool:
         key_paths = [
@@ -1231,6 +1313,17 @@ class WordPackWebviewApp:
         self.bridge.send("main", "config-updated", payload)
         return {"ok": True, "enabled": enabled}
 
+    def _toggle_startup_enabled_from_tray(self) -> dict[str, Any]:
+        desired = not bool(self.config.interaction.startup_launch_enabled)
+        success, actual = self._apply_startup_launch_enabled(desired)
+        self.config_store.save(self.config)
+        self.set_status("已启用开机自启动" if actual else "已关闭开机自启动")
+        if not success and actual != desired:
+            self.set_status("开机自启动设置失败，请检查系统权限后重试")
+        payload = self._config_event_payload()
+        self.bridge.send("main", "config-updated", payload)
+        return {"ok": bool(success), "enabled": bool(actual)}
+
     def _toggle_screenshot_enabled_from_tray(self) -> dict[str, Any]:
         with self.lock:
             self.config.interaction.screenshot_enabled = not bool(self.config.interaction.screenshot_enabled)
@@ -1262,6 +1355,9 @@ class WordPackWebviewApp:
             return
         if key == "toggle_selection":
             self._toggle_selection_enabled_from_tray()
+            return
+        if key == "toggle_startup":
+            self._toggle_startup_enabled_from_tray()
             return
         if key == "toggle_screenshot":
             self._toggle_screenshot_enabled_from_tray()
@@ -1940,6 +2036,7 @@ class WordPackWebviewApp:
         interaction = payload.get("interaction", {}) if isinstance(payload, dict) else {}
         dictionary = payload.get("dictionary", {}) if isinstance(payload, dict) else {}
         theme_mode = str(payload.get("theme_mode", self.config.theme_mode) or self.config.theme_mode) if isinstance(payload, dict) else self.config.theme_mode
+        startup_launch_enabled = bool(interaction.get("startup_launch_enabled", self.config.interaction.startup_launch_enabled))
 
         try:
             timeout_sec = max(5, int(openai.get("timeout_sec", self.config.openai.timeout_sec)))
@@ -2051,6 +2148,17 @@ class WordPackWebviewApp:
         self.config.interaction.app_profiles = normalized_profiles
         self.config.history.retention_days = retention_days if retention_days in {7, 30, 90} else 30
 
+        startup_prev = bool(self.config.interaction.startup_launch_enabled)
+        startup_status_message = ""
+        if startup_launch_enabled != startup_prev:
+            startup_ok, startup_actual = self._apply_startup_launch_enabled(startup_launch_enabled)
+            if not startup_ok and startup_actual != startup_launch_enabled:
+                startup_status_message = "开机自启动设置失败，请检查系统权限后重试"
+            else:
+                startup_status_message = "已启用开机自启动" if startup_actual else "已关闭开机自启动"
+        else:
+            self.config.interaction.startup_launch_enabled = bool(startup_launch_enabled)
+
         if theme_mode not in {"system", "light", "dark"}:
             theme_mode = "system"
         self.config.theme_mode = theme_mode
@@ -2065,7 +2173,9 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to restart hotkey manager after settings update")
 
-        if self._normalize_translation_mode(self.config.translation_mode) == "dictionary":
+        if startup_status_message:
+            self.set_status(startup_status_message)
+        elif self._normalize_translation_mode(self.config.translation_mode) == "dictionary":
             self.set_status(self.service.dictionary_diagnostics())
         else:
             self.set_status("AI 设置已保存")

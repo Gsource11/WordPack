@@ -122,6 +122,7 @@ class TrayIconManager:
     ID_SETTINGS = 1004
     ID_SELECTION = 1005
     ID_SCREENSHOT = 1006
+    ID_STARTUP = 1007
 
     def __init__(
         self,
@@ -299,26 +300,33 @@ class TrayIconManager:
         if not menu:
             return
         state = self._state_getter() or {}
+        startup_enabled = bool(state.get("startup_launch_enabled", False))
         selection_enabled = bool(state.get("selection_enabled", True))
         screenshot_enabled = bool(state.get("screenshot_enabled", True))
 
-        # Menu appears top->bottom. User-required bottom->top:
-        # 退出, 主界面, 历史, 设置, 划词, 截图.
+        # Menu appears top->bottom.
+        # Keep "开机自启动" as the first item for quick access.
         user32.AppendMenuW(
             menu,
-            MF_BYPOSITION | MF_STRING | (MF_CHECKED if screenshot_enabled else 0),
-            self.ID_SCREENSHOT,
-            "截图",
+            MF_BYPOSITION | MF_STRING | (MF_CHECKED if startup_enabled else 0),
+            self.ID_STARTUP,
+            "开机自启动",
         )
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_MAIN, "主界面")
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_HISTORY, "历史")
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_SETTINGS, "设置")
         user32.AppendMenuW(
             menu,
             MF_BYPOSITION | MF_STRING | (MF_CHECKED if selection_enabled else 0),
             self.ID_SELECTION,
             "划词",
         )
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_SETTINGS, "设置")
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_HISTORY, "历史")
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_MAIN, "主界面")
+        user32.AppendMenuW(
+            menu,
+            MF_BYPOSITION | MF_STRING | (MF_CHECKED if screenshot_enabled else 0),
+            self.ID_SCREENSHOT,
+            "截图",
+        )
         user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_EXIT, "退出")
 
         pt = POINT()
@@ -346,6 +354,7 @@ class TrayIconManager:
             self.ID_SETTINGS: "open_settings",
             self.ID_SELECTION: "toggle_selection",
             self.ID_SCREENSHOT: "toggle_screenshot",
+            self.ID_STARTUP: "toggle_startup",
         }
         action = action_map.get(int(command_id))
         if not action:
