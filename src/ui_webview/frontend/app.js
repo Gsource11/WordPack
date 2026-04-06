@@ -1443,7 +1443,25 @@
             <section class="setting-group">
               <div class="setting-title">启动</div>
               <div class="field">
-                <label class="toggle-row"><input type="checkbox" data-field="interaction.startup_launch_enabled" ${startupEnabled ? "checked" : ""}/>开机自启动</label>
+                <label>开机自启动</label>
+                <div class="choice-group">
+                  <button
+                    class="choice-chip ${startupEnabled ? "active" : ""}"
+                    data-action="set-setting-choice"
+                    data-field="interaction.startup_launch_enabled"
+                    data-value="true"
+                    data-value-type="boolean"
+                    type="button"
+                  >开启</button>
+                  <button
+                    class="choice-chip ${!startupEnabled ? "active" : ""}"
+                    data-action="set-setting-choice"
+                    data-field="interaction.startup_launch_enabled"
+                    data-value="false"
+                    data-value-type="boolean"
+                    type="button"
+                  >关闭</button>
+                </div>
                 <small>登录 Windows 后自动启动 WordPack。</small>
               </div>
             </section>
@@ -2072,7 +2090,19 @@
         break;
       case "set-setting-choice":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
-        setValue(state.settingsDraft, actionTarget.dataset.field || "", actionTarget.dataset.value || "");
+        {
+          const field = actionTarget.dataset.field || "";
+          const rawValue = actionTarget.dataset.value || "";
+          const valueType = String(actionTarget.dataset.valueType || "").toLowerCase();
+          let parsedValue = rawValue;
+          if (valueType === "boolean") {
+            parsedValue = rawValue === "true";
+          } else if (valueType === "number") {
+            const num = Number(rawValue);
+            parsedValue = Number.isFinite(num) ? num : rawValue;
+          }
+          setValue(state.settingsDraft, field, parsedValue);
+        }
         scheduleSettingsSave(true);
         rerender();
         break;
