@@ -11,17 +11,25 @@
         min-height: 100%;
         background: #c4c6ca;
       }
+      html.preload-main,
+      html.preload-main body {
+        background: #c4c6ca !important;
+        background-image: none !important;
+      }
       html.preload-dark,
       html.preload-dark body {
         background: #1b2028 !important;
+        background-image: none !important;
       }
       html.preload-transparent,
       html.preload-transparent body {
         background: transparent !important;
+        background-image: none !important;
       }
       html.preload-screenshot,
       html.preload-screenshot body {
         background: transparent !important;
+        background-image: none !important;
       }
     </style>
     <script>
@@ -31,8 +39,8 @@
         var theme = params.get("theme") || "light";
         var rev = params.get("rev") || String(Date.now());
         document.documentElement.dataset.view = view;
-        if (theme === "dark" && view === "main") {
-          document.documentElement.classList.add("preload-dark");
+        if (view === "main") {
+          document.documentElement.classList.add(theme === "dark" ? "preload-dark" : "preload-main");
         }
         if (view === "icon" || view === "bubble") {
           document.documentElement.classList.add("preload-transparent");

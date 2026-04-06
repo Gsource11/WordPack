@@ -123,7 +123,10 @@ class WordPackWebviewApp:
             logger=self.logger,
         )
 
-        self.hidden = False
+        # Keep main window hidden until frontend explicitly reports ready,
+        # preventing first-paint white/black flash from WebView2 default surface.
+        self.hidden = True
+        self._main_startup_revealed = False
         self._shutting_down = False
         self._translate_request_seq = 0
         self._active_translate_request_seq = 0
@@ -327,6 +330,7 @@ class WordPackWebviewApp:
             on_top=False,
             focus=True,
             transparent=False,
+            hidden=True,
         )
         # Pre-create screenshot window on the main thread to avoid runtime
         # WebView2 controller creation races when hotkey triggers screenshot.
@@ -741,17 +745,17 @@ class WordPackWebviewApp:
         self.logger.info("Starting background input services")
         try:
             if self.main_window is not None:
-                show = getattr(self.main_window, "show", None)
                 current = self._current_main_geometry()
                 if current is not None:
                     x, y, width, _height = current
-                    self._apply_main_geometry(x, y, width, self.MAIN_COMPACT_HEIGHT)
+                    try:
+                        self.main_window.resize(int(width), int(self.MAIN_COMPACT_HEIGHT))
+                        self.main_window.move(int(x), int(y))
+                    except Exception:
+                        self.logger.exception("Failed to prepare main window compact geometry on startup")
                     self._main_compact = True
-                elif callable(show):
-                    show()
-                self.hidden = False
         except Exception:
-            self.logger.exception("Failed to reveal main window on startup")
+            self.logger.exception("Failed to prepare main window on startup")
         self._start_input_polling()
         if self._should_probe_ai_on_startup():
             self._probe_ai_availability_async()
@@ -971,6 +975,37 @@ class WordPackWebviewApp:
 
     def mark_window_ready(self, kind: str) -> None:
         self.bridge.mark_ready(kind)
+        if kind != "main" or self.main_window is None:
+            return
+        with self.lock:
+            if self._main_startup_revealed:
+                return
+            self._main_startup_revealed = True
+
+        def reveal_main() -> None:
+            if self.main_window is None:
+                return
+            current = self._current_main_geometry()
+            if current is not None:
+                x, y, width, _height = current
+                self._apply_main_geometry(x, y, width, self.MAIN_COMPACT_HEIGHT)
+                self._main_compact = True
+                return
+            try:
+                self.main_window.show()
+                self.hidden = False
+            except Exception:
+                self.logger.exception("Failed to reveal main window on ready")
+
+        try:
+            self._run_on_window_ui(
+                self.main_window,
+                reveal_main,
+                wait=False,
+                log_prefix="mark_window_ready.reveal_main",
+            )
+        except Exception:
+            self.logger.exception("Failed to schedule main window reveal after ready")
 
     def screenshot_presented(self, session_id: int | None = None) -> None:
         session = self._screenshot_session
