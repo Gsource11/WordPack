@@ -316,19 +316,31 @@ class NativeIconOverlay:
             from PIL import Image
             from PIL import ImageDraw
 
-            canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            # Draw in supersampled space then downscale to smooth circle edges.
+            ss = 4
+            hw = int(w * ss)
+            hh = int(h * ss)
+            canvas = Image.new("RGBA", (hw, hh), (0, 0, 0, 0))
             draw = ImageDraw.Draw(canvas)
             # Visual token: warm light circle that improves contrast for orange icon.
-            bg_d = max(20, min(28, self._icon_size + 8))
-            bg_left = (w - bg_d) // 2
-            bg_top = (h - bg_d) // 2
-            bg_box = (bg_left, bg_top, bg_left + bg_d, bg_top + bg_d)
-            draw.ellipse(bg_box, fill=(245, 247, 250, 235), outline=(209, 216, 226, 230), width=1)
+            bg_d = max(20, min(30, self._icon_size + 9))
+            bg_d_hi = int(bg_d * ss)
+            bg_left = (hw - bg_d_hi) // 2
+            bg_top = (hh - bg_d_hi) // 2
+            bg_box = (bg_left, bg_top, bg_left + bg_d_hi, bg_top + bg_d_hi)
+            border_width = max(2, int(round(1.6 * ss)))
+            draw.ellipse(
+                bg_box,
+                fill=(245, 247, 250, 238),
+                outline=(196, 205, 218, 245),
+                width=border_width,
+            )
             if self._icon_path.exists():
                 with Image.open(self._icon_path) as image:
-                    icon = image.convert("RGBA").resize((self._icon_size, self._icon_size), Image.LANCZOS)
-                offset = ((w - self._icon_size) // 2, (h - self._icon_size) // 2)
+                    icon = image.convert("RGBA").resize((self._icon_size * ss, self._icon_size * ss), Image.LANCZOS)
+                offset = ((hw - (self._icon_size * ss)) // 2, (hh - (self._icon_size * ss)) // 2)
                 canvas.alpha_composite(icon, dest=offset)
+            canvas = canvas.resize((w, h), Image.LANCZOS)
             rgba = canvas.tobytes("raw", "RGBA")
         except Exception:
             # Fallback glyph (circle token + orange ring/dot) when PIL/icon asset is unavailable.
