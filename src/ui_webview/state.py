@@ -51,11 +51,7 @@ class SelectionCandidate:
 @dataclass
 class ScreenshotSession:
     session_id: int
-    background_data_url: str
     bounds: dict[str, int]
     show_bubble: bool
     main_was_hidden: bool
-    hint_x: int = 0
-    hint_y: int = 0
     started_at: float = 0.0
-    presented: bool = False

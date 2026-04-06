@@ -22,6 +22,7 @@ from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
+from src.native_screenshot_overlay import NativeScreenshotOverlay
 from src.ocr import ScreenshotOCRService
 from src.selection_capture import ClipboardCaptureResult, SelectionCaptureService
 from src.screenshot import MIN_CAPTURE_SIZE, ScreenRegion, capture_screen_region
@@ -58,7 +59,6 @@ class WordPackWebviewApp:
     ICON_HEIGHT = 34
     AI_PROBE_INTERVAL_SEC = 3600
     AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
-    SCREENSHOT_PRESENT_TIMEOUT_SEC = 2.2
     WEBVIEW2_RUNTIME_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
     def __init__(self) -> None:
@@ -102,7 +102,6 @@ class WordPackWebviewApp:
         self.main_window = None
         self.bubble_window = None
         self.icon_window = None
-        self.screenshot_window = None
         self.window_apis: dict[str, WindowApi] = {}
         self._native_icon_overlay = NativeIconOverlay(
             icon_path=icon_path("app-icon.png"),
@@ -110,6 +109,11 @@ class WordPackWebviewApp:
             on_click=lambda: self.trigger_selection_translate(),
             window_size=self.ICON_WIDTH,
             icon_size=18,
+        )
+        self._native_screenshot_overlay = NativeScreenshotOverlay(
+            logger=self.logger,
+            on_selection=self._on_native_screenshot_selection,
+            on_cancel=self._on_native_screenshot_cancel,
         )
         tray_icon = self._app_icon_ico or icon_path("app-icon.ico")
         self.tray_icon = TrayIconManager(
@@ -157,7 +161,6 @@ class WordPackWebviewApp:
         self._screenshot_cancel_last_at = 0.0
         self._screenshot_starting = False
         self._last_screenshot_trigger_at = 0.0
-        self._screenshot_present_timeout_timer: threading.Timer | None = None
         self._selection_suppressed_until = 0.0
         self._last_window_interaction_at = 0.0
         self._input_poll_stop = threading.Event()
@@ -332,24 +335,6 @@ class WordPackWebviewApp:
             transparent=False,
             hidden=True,
         )
-        # Pre-create screenshot window on the main thread to avoid runtime
-        # WebView2 controller creation races when hotkey triggers screenshot.
-        bounds = get_virtual_screen_bounds()
-        self.screenshot_window = self._create_window(
-            kind="screenshot",
-            title=APP_TITLE,
-            width=1,
-            height=1,
-            x=-32000,
-            y=-32000,
-            frameless=True,
-            shadow=False,
-            resizable=False,
-            on_top=True,
-            focus=True,
-            transparent=True,
-            hidden=True,
-        )
         self.logger.info("Main webview window created")
         try:
             self.tray_icon.start()
@@ -404,7 +389,7 @@ class WordPackWebviewApp:
         theme = self._resolved_theme_mode()
         if kind in {"main", "bubble"}:
             return self.DARK_WINDOW_BG if theme == "dark" else self.MAIN_WINDOW_BG
-        if kind in {"icon", "screenshot"}:
+        if kind == "icon":
             return "#000000"
         return "#eef1ec"
 
@@ -863,16 +848,6 @@ class WordPackWebviewApp:
             elif kind == "icon":
                 self.icon_window = None
                 self._native_icon_overlay.hide()
-            elif kind == "screenshot":
-                self.screenshot_window = None
-                session = self._screenshot_session
-                self._cancel_screenshot_present_timeout()
-                self._set_global_cursor_crosshair(False)
-                if session is not None:
-                    self._restore_main_after_screenshot(main_was_hidden=self._main_hidden_flag_for_session(session))
-                self._screenshot_session = None
-                self._notify_screenshot_session_clear()
-                self._clear_screenshot_background_image()
 
         if kind == "main" and not self._shutting_down:
             self.shutdown()
@@ -897,7 +872,7 @@ class WordPackWebviewApp:
         self._cancel_selection_icon_hide_timer()
         self._cancel_bubble_hide_timer()
         self._native_icon_overlay.destroy()
-        self._cancel_screenshot_present_timeout()
+        self._native_screenshot_overlay.destroy()
         self._set_global_cursor_crosshair(False)
         try:
             self.tray_icon.stop()
@@ -911,7 +886,7 @@ class WordPackWebviewApp:
         if self._ai_probe_thread is not None and self._ai_probe_thread.is_alive():
             self._ai_probe_thread.join(timeout=0.8)
 
-        for kind in ("bubble", "icon", "screenshot", "main"):
+        for kind in ("bubble", "icon", "main"):
             window = getattr(self, f"{kind}_window", None)
             if window is None:
                 continue
@@ -919,7 +894,6 @@ class WordPackWebviewApp:
                 window.destroy()
             except Exception:
                 self.logger.exception("Failed to destroy %s window", kind)
-        self._notify_screenshot_session_clear()
         self._clear_screenshot_background_image()
 
     def bootstrap_window(self, kind: str) -> dict[str, Any]:
@@ -951,27 +925,7 @@ class WordPackWebviewApp:
                 "mode": self.config.translation_mode,
                 "triggerMode": self.config.interaction.selection_icon_trigger,
             }
-        if kind == "screenshot":
-            session = self._screenshot_session
-            return {
-                "view": "screenshot",
-                "branding": self._branding_payload(),
-                "themeMode": self._resolved_theme_mode(),
-                "screenshot": self._screenshot_payload(session),
-            }
         return {"view": kind}
-
-    @staticmethod
-    def _screenshot_payload(session: ScreenshotSession | None) -> dict[str, Any]:
-        if session is None:
-            return {"sessionId": 0, "backgroundDataUrl": "", "bounds": {}, "hintX": 0, "hintY": 0}
-        return {
-            "sessionId": int(session.session_id),
-            "backgroundDataUrl": str(session.background_data_url or ""),
-            "bounds": dict(session.bounds or {}),
-            "hintX": int(session.hint_x or 0),
-            "hintY": int(session.hint_y or 0),
-        }
 
     def mark_window_ready(self, kind: str) -> None:
         self.bridge.mark_ready(kind)
@@ -1008,120 +962,7 @@ class WordPackWebviewApp:
             self.logger.exception("Failed to schedule main window reveal after ready")
 
     def screenshot_presented(self, session_id: int | None = None) -> None:
-        session = self._screenshot_session
-        if self.screenshot_window is None or session is None:
-            self.logger.info("screenshot_presented: ignored (no active session)")
-            return
-        normalized_session_id: int | None
-        try:
-            normalized_session_id = int(session_id) if session_id is not None else None
-        except Exception:
-            normalized_session_id = None
-        if normalized_session_id is not None and int(session.session_id) != normalized_session_id:
-            self.logger.info(
-                "screenshot_presented: ignored (stale session) current=%s payload=%s",
-                int(session.session_id),
-                normalized_session_id,
-            )
-            return
-        if not str(session.background_data_url or "").strip():
-            self.logger.info("screenshot_presented: ignored (invalid background)")
-            return
-        with self.lock:
-            active = self._screenshot_session
-            if active is None or int(active.session_id) != int(session.session_id):
-                return
-            active.presented = True
-        self._cancel_screenshot_present_timeout()
-        try:
-            self.logger.info("screenshot_presented: showing screenshot window")
-            def show_screenshot_window() -> None:
-                self._force_screenshot_topmost_bounds(self.screenshot_window, session.bounds)
-                self._set_window_show_in_taskbar(self.screenshot_window, False)
-                try:
-                    native = getattr(self.screenshot_window, "native", None)
-                    if native is not None:
-                        self._set_window_native_opacity(native, 0.0)
-                        self._set_native_crosshair_cursor(native, True)
-                except Exception:
-                    self.logger.exception("Failed to hide screenshot window taskbar entry")
-                self.screenshot_window.show()
-                try:
-                    native = getattr(self.screenshot_window, "native", None)
-                    if native is not None and not getattr(native, "IsDisposed", False):
-                        native.Activate()
-                        self._set_native_crosshair_cursor(native, True)
-                except Exception:
-                    pass
-
-            self._run_on_window_ui(
-                self.screenshot_window,
-                show_screenshot_window,
-                wait=True,
-                timeout_sec=2.0,
-                log_prefix="screenshot_presented",
-            )
-            shown_session_id = int(session.session_id)
-
-            def reveal_if_current() -> None:
-                active = self._screenshot_session
-                if active is None or int(active.session_id) != shown_session_id:
-                    return
-                self._set_screenshot_window_opacity(1.0)
-                try:
-                    native = getattr(self.screenshot_window, "native", None)
-                    if native is not None and not getattr(native, "IsDisposed", False):
-                        self._set_native_crosshair_cursor(native, True)
-                except Exception:
-                    pass
-
-            timer = threading.Timer(0.018, reveal_if_current)
-            timer.daemon = True
-            timer.start()
-            self._set_global_cursor_crosshair(True)
-        except Exception:
-            self.logger.exception("Failed to show screenshot window after image presented")
-            self.cancel_screenshot_capture()
-            self.set_status("截图界面显示失败，请重试")
-
-    def _force_screenshot_topmost_bounds(self, window, bounds: dict[str, int]) -> None:
-        native = getattr(window, "native", None)
-        if native is None:
-            return
-        handle = getattr(native, "Handle", None)
-        if handle is None:
-            return
-        hwnd = self._native_handle_to_int(handle)
-        if not hwnd:
-            return
-
-        left = int(bounds.get("left", 0))
-        top = int(bounds.get("top", 0))
-        width = max(1, int(bounds.get("width", 1)))
-        height = max(1, int(bounds.get("height", 1)))
-        HWND_TOPMOST = -1
-        SWP_FLAGS = 0x0000
-        try:
-            ctypes.windll.user32.SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                left,
-                top,
-                width,
-                height,
-                SWP_FLAGS,
-            )
-        except Exception:
-            self.logger.exception("Failed to force screenshot window topmost bounds")
-
-    @staticmethod
-    def _set_window_native_opacity(native, opacity: float) -> None:
-        try:
-            value = max(0.0, min(1.0, float(opacity)))
-            native.Opacity = value
-        except Exception:
-            # Some webview backends may not expose Opacity.
-            pass
+        del session_id
 
     @staticmethod
     def _native_handle_to_int(handle) -> int | None:
@@ -1144,92 +985,6 @@ class WordPackWebviewApp:
             return None
 
     @staticmethod
-    def _set_native_crosshair_cursor(native, enabled: bool) -> None:
-        try:
-            from System.Windows.Forms import Cursors  # type: ignore[import-not-found]
-        except ImportError:
-            return
-        cursor_obj = Cursors.Cross if enabled else Cursors.Default
-        try:
-            native.Cursor = cursor_obj
-        except Exception:
-            pass
-        try:
-            handle = getattr(cursor_obj, "Handle", None)
-            if handle is None:
-                return
-            hcursor = WordPackWebviewApp._native_handle_to_int(handle)
-            if hcursor:
-                ctypes.windll.user32.SetCursor(ctypes.c_void_p(hcursor))
-        except Exception:
-            pass
-
-    def _set_window_show_in_taskbar(self, window, show_in_taskbar: bool) -> None:
-        if window is None:
-            return
-
-        def apply() -> None:
-            native = getattr(window, "native", None)
-            if native is None or getattr(native, "IsDisposed", False):
-                return
-            try:
-                native.ShowInTaskbar = bool(show_in_taskbar)
-            except Exception:
-                self.logger.exception("Failed to set window ShowInTaskbar=%s", bool(show_in_taskbar))
-            if not bool(show_in_taskbar):
-                self._force_hide_window_from_taskbar(native)
-
-        try:
-            self._run_on_window_ui(
-                window,
-                apply,
-                wait=True,
-                timeout_sec=1.5,
-                log_prefix="set_window_show_in_taskbar",
-            )
-        except Exception:
-            self.logger.exception("Failed to apply ShowInTaskbar on window")
-
-    def _force_hide_window_from_taskbar(self, native) -> None:
-        handle = getattr(native, "Handle", None)
-        if handle is None:
-            return
-        hwnd = self._native_handle_to_int(handle)
-        if not hwnd:
-            return
-        if hwnd <= 0:
-            return
-
-        GWL_EXSTYLE = -20
-        WS_EX_TOOLWINDOW = 0x00000080
-        WS_EX_APPWINDOW = 0x00040000
-        SWP_NOSIZE = 0x0001
-        SWP_NOMOVE = 0x0002
-        SWP_NOZORDER = 0x0004
-        SWP_NOACTIVATE = 0x0010
-        SWP_FRAMECHANGED = 0x0020
-
-        try:
-            user32 = ctypes.windll.user32
-            get_window_long = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
-            set_window_long = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
-            ex_style = int(get_window_long(hwnd, GWL_EXSTYLE))
-            target_style = int((ex_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
-            if target_style != ex_style:
-                set_window_long(hwnd, GWL_EXSTYLE, target_style)
-                user32.SetWindowPos(
-                    hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-                )
-        except Exception:
-            self.logger.exception("Failed to apply toolwindow style for taskbar hiding")
-
-    @staticmethod
     def _set_global_cursor_crosshair(enabled: bool) -> None:
         try:
             cursor_id = 32515 if enabled else 32512  # IDC_CROSS / IDC_ARROW
@@ -1241,34 +996,6 @@ class WordPackWebviewApp:
                     ctypes.windll.user32.SetCursorPos(int(point.x), int(point.y))
         except Exception:
             pass
-
-    def _set_screenshot_window_opacity(self, opacity: float) -> None:
-        window = self.screenshot_window
-        if window is None:
-            return
-
-        def apply() -> None:
-            native = getattr(window, "native", None)
-            if native is None or getattr(native, "IsDisposed", False):
-                return
-            self._set_window_native_opacity(native, opacity)
-
-        try:
-            self._run_on_window_ui(
-                window,
-                apply,
-                wait=True,
-                timeout_sec=1.0,
-                log_prefix="set_screenshot_opacity",
-            )
-        except Exception:
-            self.logger.exception("Failed to set screenshot window opacity")
-
-    def _ensure_screenshot_window(self) -> bool:
-        ok = self.screenshot_window is not None
-        if not ok:
-            self.logger.warning("ensure_screenshot_window: screenshot window missing")
-        return ok
 
     def _suppress_selection_events(self, seconds: float = 0.65) -> None:
         until = time.time() + max(0.0, float(seconds))
@@ -2322,7 +2049,7 @@ class WordPackWebviewApp:
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True, "message": "已开始导入"}
 
-    def _save_screenshot_background_image(self, image) -> str:
+    def _save_screenshot_background_image(self, image) -> None:
         runtime_dir = self.frontend_dir / "__runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         filename = f"bg_{uuid.uuid4().hex}.png"
@@ -2335,7 +2062,7 @@ class WordPackWebviewApp:
                 old.unlink(missing_ok=True)
             except Exception:
                 self.logger.exception("Failed to delete old screenshot background: %s", old)
-        return f"./__runtime/{filename}?v={int(time.time() * 1000)}"
+        return None
 
     @staticmethod
     def _flush_dwm() -> None:
@@ -2343,12 +2070,6 @@ class WordPackWebviewApp:
             ctypes.windll.dwmapi.DwmFlush()
         except Exception:
             pass
-
-    def _notify_screenshot_session_clear(self) -> None:
-        try:
-            self.bridge.send("screenshot", "screenshot-session-clear", {})
-        except Exception:
-            self.logger.exception("Failed to notify screenshot-session-clear")
 
     def _capture_selection_image_from_background(
         self,
@@ -2390,36 +2111,6 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to clear screenshot background: %s", path)
 
-    def _cancel_screenshot_present_timeout(self) -> None:
-        timer = self._screenshot_present_timeout_timer
-        self._screenshot_present_timeout_timer = None
-        if timer is None:
-            return
-        try:
-            timer.cancel()
-        except Exception:
-            pass
-
-    def _schedule_screenshot_present_timeout(self, session_id: int) -> None:
-        self._cancel_screenshot_present_timeout()
-
-        def on_timeout() -> None:
-            should_cancel = False
-            with self.lock:
-                session = self._screenshot_session
-                if session is not None and int(session.session_id) == int(session_id) and not bool(session.presented):
-                    should_cancel = True
-            if not should_cancel:
-                return
-            self.logger.warning("screenshot_present_timeout: session=%s", int(session_id))
-            self.cancel_screenshot_capture()
-            self.set_status("截图界面加载超时，请重试")
-
-        timer = threading.Timer(self.SCREENSHOT_PRESENT_TIMEOUT_SEC, on_timeout)
-        timer.daemon = True
-        self._screenshot_present_timeout_timer = timer
-        timer.start()
-
     def start_screenshot_capture(self, show_bubble: bool) -> dict[str, Any]:
         now = time.time()
         with self.lock:
@@ -2438,12 +2129,14 @@ class WordPackWebviewApp:
             self._selection_icon_anchor_pos = None
             self._selection_icon_shown_at = 0.0
             self._selection_icon_hover_armed = False
-            self._cancel_screenshot_present_timeout()
             self._set_global_cursor_crosshair(True)
             self._suppress_selection_events(1.0)
 
             main_hidden_before = bool(self.hidden) or (not self._is_main_window_visible())
-            if (not main_hidden_before) and self.main_window is not None:
+            main_hidden_for_capture = False
+            # Only hide main when it is actually foreground; otherwise keep current
+            # taskbar/window state untouched to avoid side effects.
+            if (not main_hidden_before) and self.main_window is not None and self._is_our_window_foreground():
                 try:
                     self._run_on_window_ui(
                         self.main_window,
@@ -2452,44 +2145,20 @@ class WordPackWebviewApp:
                         timeout_sec=1.2,
                         log_prefix="start_screenshot_capture.hide_main",
                     )
+                    main_hidden_for_capture = True
                 except Exception:
                     self.logger.exception("Failed to hide main window before screenshot capture")
-            self.hidden = True
-            self._notify_screenshot_session_clear()
-
-            if not self._ensure_screenshot_window():
-                self._set_global_cursor_crosshair(False)
-                self._restore_main_after_screenshot(main_was_hidden=bool(main_hidden_before))
-                message = "截图窗口不可用，请重试或重启应用。"
-                self.set_status(message)
-                return {"ok": False, "message": message}
-
-            # Force-hide and transparentize screenshot window before grabbing a new frame.
-            # This avoids capturing or briefly re-showing stale pixels from previous sessions.
-            if self.screenshot_window is not None:
-                try:
-                    def hide_before_capture() -> None:
-                        native = getattr(self.screenshot_window, "native", None)
-                        if native is not None and not getattr(native, "IsDisposed", False):
-                            self._set_window_native_opacity(native, 0.0)
-                        self.screenshot_window.hide()
-
-                    self._run_on_window_ui(
-                        self.screenshot_window,
-                        hide_before_capture,
-                        wait=True,
-                        timeout_sec=1.5,
-                        log_prefix="start_screenshot_capture.pre_hide",
-                    )
-                except Exception:
-                    self.logger.exception("Failed to pre-hide screenshot window before capture")
+            if main_hidden_for_capture:
+                self.hidden = True
+            else:
+                self.hidden = bool(main_hidden_before)
             # Let the compositor settle so we don't capture stale frames from previous sessions.
             self._flush_dwm()
             time.sleep(0.022)
 
             try:
                 image = capture_virtual_screen()
-                background_data_url = self._save_screenshot_background_image(image)
+                self._save_screenshot_background_image(image)
             except Exception as exc:
                 self._set_global_cursor_crosshair(False)
                 self._restore_main_after_screenshot(main_was_hidden=bool(main_hidden_before))
@@ -2501,58 +2170,29 @@ class WordPackWebviewApp:
             cursor_x, cursor_y = get_cursor_position()
             with self.lock:
                 self._screenshot_session_seq += 1
+                session_id = int(self._screenshot_session_seq)
                 self._screenshot_session = ScreenshotSession(
-                    session_id=self._screenshot_session_seq,
-                    background_data_url=background_data_url,
+                    session_id=session_id,
                     bounds=bounds.to_payload(),
                     show_bubble=bool(show_bubble),
                     main_was_hidden=main_hidden_before,
-                    hint_x=int(cursor_x),
-                    hint_y=int(cursor_y),
                     started_at=now,
                 )
             try:
-                if self.screenshot_window is None:
-                    raise RuntimeError("截图窗口不可用，请重试或重启应用。")
-
-                def prepare_screenshot_window() -> None:
-                    self._set_window_show_in_taskbar(self.screenshot_window, False)
-                    try:
-                        native = getattr(self.screenshot_window, "native", None)
-                        if native is not None and not getattr(native, "IsDisposed", False):
-                            self._set_window_native_opacity(native, 0.0)
-                            self._set_native_crosshair_cursor(native, True)
-                        self.screenshot_window.hide()
-                    except Exception:
-                        pass
-                    self.screenshot_window.move(int(bounds.left), int(bounds.top))
-                    self.screenshot_window.resize(max(300, int(bounds.width)), max(200, int(bounds.height)))
-                    try:
-                        self.screenshot_window.show()
-                        native = getattr(self.screenshot_window, "native", None)
-                        if native is not None and not getattr(native, "IsDisposed", False):
-                            native.Activate()
-                            self._set_native_crosshair_cursor(native, True)
-                    except Exception:
-                        pass
-
-                self._run_on_window_ui(
-                    self.screenshot_window,
-                    prepare_screenshot_window,
-                    wait=True,
-                    timeout_sec=3.0,
-                    log_prefix="start_screenshot_capture",
+                overlay_ok = self._native_screenshot_overlay.show(
+                    session_id=session_id,
+                    image=image,
+                    bounds=bounds.to_payload(),
+                    hint_x=int(cursor_x),
+                    hint_y=int(cursor_y),
                 )
-                self.bridge.send("screenshot", "screenshot-session-start", {"screenshot": self._screenshot_payload(self._screenshot_session)})
-                if self._screenshot_session is not None:
-                    self._schedule_screenshot_present_timeout(int(self._screenshot_session.session_id))
+                if not overlay_ok:
+                    raise RuntimeError("截图界面初始化失败，请重试")
             except Exception as exc:
                 with self.lock:
                     session = self._screenshot_session
                     self._screenshot_session = None
                 self._close_screenshot_window()
-                self._cancel_screenshot_present_timeout()
-                self._notify_screenshot_session_clear()
                 self._clear_screenshot_background_image()
                 self._set_global_cursor_crosshair(False)
                 if session is not None:
@@ -2566,16 +2206,32 @@ class WordPackWebviewApp:
             with self.lock:
                 self._screenshot_starting = False
 
+    def _on_native_screenshot_selection(self, payload: dict[str, int]) -> None:
+        try:
+            self.finish_screenshot_selection(dict(payload))
+        except Exception:
+            self.logger.exception("Failed to finish screenshot selection from native overlay")
+
+    def _on_native_screenshot_cancel(self, session_id: int) -> None:
+        with self.lock:
+            session = self._screenshot_session
+            if session is None:
+                return
+            if int(session_id) != int(session.session_id):
+                return
+        try:
+            self.cancel_screenshot_capture()
+        except Exception:
+            self.logger.exception("Failed to cancel screenshot capture from native overlay")
+
     def cancel_screenshot_capture(self) -> dict[str, Any]:
         with self.lock:
             session = self._screenshot_session
             self._screenshot_session = None
             self._screenshot_cancel_last_at = time.time()
         self._suppress_selection_events(0.7)
-        self._cancel_screenshot_present_timeout()
         self._close_screenshot_window()
         self._set_global_cursor_crosshair(False)
-        self._notify_screenshot_session_clear()
         self._clear_screenshot_background_image()
         if session is not None:
             self._restore_main_after_screenshot(main_was_hidden=self._main_hidden_flag_for_session(session))
@@ -2597,10 +2253,8 @@ class WordPackWebviewApp:
             self._screenshot_session = None
 
         self._suppress_selection_events(0.7)
-        self._cancel_screenshot_present_timeout()
         self._close_screenshot_window()
         self._set_global_cursor_crosshair(False)
-        self._notify_screenshot_session_clear()
         self._flush_dwm()
         time.sleep(0.01)
 
@@ -2708,35 +2362,13 @@ class WordPackWebviewApp:
     def _main_hidden_flag_for_session(session: ScreenshotSession | None) -> bool:
         if session is None:
             return False
-        return bool(session.main_was_hidden or session.show_bubble)
+        return bool(session.main_was_hidden)
 
     def _close_screenshot_window(self) -> None:
-        window = self.screenshot_window
-        if window is None:
-            return
-
         try:
-            self._run_on_window_ui(
-                window,
-                lambda: self._hide_screenshot_window_on_ui(window),
-                wait=True,
-                timeout_sec=1.5,
-                log_prefix="close_screenshot_window",
-            )
+            self._native_screenshot_overlay.hide()
         except Exception:
-            self.logger.exception("Failed to hide screenshot window")
-
-    def _hide_screenshot_window_on_ui(self, window) -> None:
-        native = getattr(window, "native", None)
-        if native is not None and not getattr(native, "IsDisposed", False):
-            self._set_window_native_opacity(native, 0.0)
-            self._set_native_crosshair_cursor(native, False)
-        window.hide()
-        try:
-            window.move(-32000, -32000)
-            window.resize(1, 1)
-        except Exception:
-            pass
+            self.logger.exception("Failed to hide native screenshot overlay")
 
 
     def _show_bubble(
@@ -3278,10 +2910,8 @@ class WordPackWebviewApp:
             self._selection_icon_hover_armed = False
         elif kind == "screenshot":
             session = self._screenshot_session
-            self._cancel_screenshot_present_timeout()
             self._close_screenshot_window()
             self._set_global_cursor_crosshair(False)
-            self._notify_screenshot_session_clear()
             window = None
             if session is not None:
                 self._restore_main_after_screenshot(main_was_hidden=self._main_hidden_flag_for_session(session))
@@ -3397,7 +3027,7 @@ class WordPackWebviewApp:
         if foreground_hwnd <= 0:
             return False
 
-        for window in (self.main_window, self.bubble_window, self.icon_window, self.screenshot_window):
+        for window in (self.main_window, self.bubble_window, self.icon_window):
             hwnd = self._window_hwnd(window)
             if hwnd and hwnd == foreground_hwnd:
                 return True
