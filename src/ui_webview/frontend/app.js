@@ -680,6 +680,19 @@
     }
   }
 
+  async function waitForSettingsSaveIdle(timeoutMs = 2200) {
+    const startedAt = Date.now();
+    while (settingsSaveInFlight || settingsSaveQueued) {
+      if ((Date.now() - startedAt) >= timeoutMs) {
+        break;
+      }
+      // Polling is acceptable here because save operations are short and this
+      // path is only used before explicit "测试连接".
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    }
+  }
+
   function scheduleSettingsSave(immediate = false) {
     if (!state.settingsOpen || !state.settingsDraft) return;
     if (settingsSaveTimer) {
@@ -2137,6 +2150,12 @@
         state.testingAi = true;
         state.aiTestState = "idle";
         rerender();
+        if (settingsSaveTimer) {
+          window.clearTimeout(settingsSaveTimer);
+          settingsSaveTimer = 0;
+        }
+        await flushSettingsDraftSave();
+        await waitForSettingsSaveIdle();
         await apiCall("test_ai_connection");
         break;
       case "import-dictionary-model":
@@ -2622,6 +2641,14 @@
     }
     if (!state.settingsOpen || !target.dataset.field) {
       return;
+    }
+    const next = event.relatedTarget;
+    if (next instanceof Element) {
+      const actionTarget = next.closest("[data-action]");
+      if (actionTarget && actionTarget.dataset.action === "test-ai") {
+        // Avoid blur-triggered save/test concurrency; test-ai path flushes save explicitly.
+        return;
+      }
     }
     scheduleSettingsSave(true);
   }

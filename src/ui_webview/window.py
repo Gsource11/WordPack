@@ -1632,7 +1632,7 @@ class WordPackWebviewApp:
         if scene == "screenshot":
             return "截图识别失败，请重试。"
         if scene == "ai_test":
-            return "连接测试失败，请检查设置后重试。"
+            return raw or "连接测试失败，请检查设置后重试。"
         if scene == "dictionary_import":
             return "导入失败，请确认模型文件可用后重试。"
 
@@ -2220,7 +2220,6 @@ class WordPackWebviewApp:
         resolved = self._resolved_theme_mode()
         self.bridge.send("bubble", "theme-updated", {"themeMode": resolved, "bubble": self._bubble_state.to_payload()})
         self.bridge.send("icon", "theme-updated", {"themeMode": resolved, "mode": self.config.translation_mode})
-        self._probe_ai_availability_async()
         return response
 
     def test_ai_connection(self) -> None:

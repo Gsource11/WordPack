@@ -1014,7 +1014,12 @@ class OpenAICompatibleTranslator:
                 temperature=0.0,
                 purpose="test",
             )
-            if "收到" in probe:
+            normalized_probe = str(probe or "").strip()
+            if "收到" in normalized_probe:
+                return True, "连接成功，可以正常使用 AI 翻译。"
+            if normalized_probe:
+                # Some models may not follow the exact "收到" instruction, but any non-empty
+                # assistant reply still proves the endpoint/model is reachable.
                 return True, "连接成功，可以正常使用 AI 翻译。"
             return False, "连接已建立，但模型返回内容异常，请检查模型配置。"
         except Exception as exc:
