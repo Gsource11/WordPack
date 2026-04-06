@@ -20,6 +20,8 @@ SetupIconFile=..\icon\app-icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=no
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -36,4 +38,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  { Try to stop a running instance before file copy to avoid "files in use" wizard friction. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "{#MyAppExeName}" /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := True;
+end;
 
