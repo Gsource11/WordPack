@@ -129,6 +129,29 @@ class SelectionCaptureService:
             clipboard_detail=clipboard_result.detail,
         )
 
+    def probe_fast(self, payload: dict | None = None, *, timeout_ms: int = 80) -> SelectionCaptureResult:
+        del timeout_ms
+        # Fast path for icon pre-verification:
+        # - in-process UIA only (no PowerShell fallback, no clipboard operations)
+        # - returns quickly with best-effort reason
+        result = self._capture_by_uia_inproc(payload)
+        if result.reason in {"uia-module-missing", "uia-module-import-failed", "uia-internal-error"}:
+            return SelectionCaptureResult(
+                source="uia",
+                reason=result.reason or "uia-fast-unavailable",
+                detail=result.detail,
+                strategy="fast-uia",
+                control_type=result.control_type,
+                class_name=result.class_name,
+                framework_id=result.framework_id,
+                stability=result.stability,
+                is_password=result.is_password,
+                uia_reason=result.uia_reason or result.reason,
+                uia_detail=result.uia_detail or result.detail,
+            )
+        result.strategy = result.strategy or "fast-uia"
+        return result
+
     def capture_by_uia(self, payload: dict | None = None) -> SelectionCaptureResult:
         inproc_result = self._capture_by_uia_inproc(payload)
         if inproc_result.reason not in {"uia-module-missing", "uia-module-import-failed", "uia-internal-error"}:

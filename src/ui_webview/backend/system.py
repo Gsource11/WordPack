@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import time
 from ctypes import POINTER, Structure, byref, c_size_t, memmove, sizeof, windll, wstring_at
 from ctypes import wintypes
 from dataclasses import dataclass
+from pathlib import Path
 import winreg
 
 from src.screenshot import capture_screen_region, get_virtual_screen_region
@@ -18,6 +20,7 @@ VK_CONTROL = 0x11
 
 user32 = windll.user32
 kernel32 = windll.kernel32
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 class POINT(Structure):
@@ -87,6 +90,77 @@ def get_cursor_position() -> tuple[int, int]:
     if bool(user32.GetCursorPos(byref(point))):
         return int(point.x), int(point.y)
     return 0, 0
+
+
+def get_foreground_window_handle() -> int:
+    try:
+        hwnd = int(user32.GetForegroundWindow())
+    except Exception:
+        return 0
+    return hwnd if hwnd > 0 else 0
+
+
+def get_foreground_process_name() -> str:
+    hwnd = get_foreground_window_handle()
+    if hwnd <= 0:
+        return ""
+
+    pid = wintypes.DWORD(0)
+    try:
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), byref(pid))
+    except Exception:
+        return ""
+    if int(pid.value or 0) <= 0:
+        return ""
+
+    process_handle = 0
+    try:
+        process_handle = int(kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid.value)))
+        if process_handle <= 0:
+            return ""
+        size = wintypes.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(int(size.value))
+        query = getattr(kernel32, "QueryFullProcessImageNameW", None)
+        if query is None:
+            return ""
+        ok = bool(query(wintypes.HANDLE(process_handle), 0, buffer, byref(size)))
+        if not ok:
+            return ""
+        full_path = str(buffer.value or "").strip()
+        if not full_path:
+            return ""
+        return Path(full_path).name.lower()
+    except Exception:
+        return ""
+    finally:
+        if process_handle:
+            try:
+                kernel32.CloseHandle(wintypes.HANDLE(process_handle))
+            except Exception:
+                pass
+
+
+def get_system_dpi_scale() -> float:
+    try:
+        get_dpi_for_system = getattr(user32, "GetDpiForSystem", None)
+        if get_dpi_for_system is not None:
+            dpi = int(get_dpi_for_system())
+            if dpi > 0:
+                return max(0.75, min(4.0, float(dpi) / 96.0))
+    except Exception:
+        pass
+
+    try:
+        hdc = user32.GetDC(0)
+        if hdc:
+            dpi_x = int(ctypes.windll.gdi32.GetDeviceCaps(hdc, 88))  # LOGPIXELSX
+            user32.ReleaseDC(0, hdc)
+            if dpi_x > 0:
+                return max(0.75, min(4.0, float(dpi_x) / 96.0))
+    except Exception:
+        pass
+
+    return 1.0
 
 
 def _open_clipboard() -> bool:

@@ -19,7 +19,7 @@ import webview
 
 from src.app_logging import APP_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
 from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
-from src.config import AppConfig, ConfigStore
+from src.config import AppConfig, ConfigStore, SelectionAppProfile
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
 from src.native_screenshot_overlay import NativeScreenshotOverlay
@@ -34,14 +34,16 @@ from src.ui_webview.api import WindowApi
 from src.ui_webview.backend import (
     capture_virtual_screen,
     copy_selection_once,
+    get_foreground_process_name,
     get_clipboard_text,
     get_cursor_position,
+    get_system_dpi_scale,
     get_system_theme_preference,
     get_virtual_screen_bounds,
     set_clipboard_text,
 )
 from src.ui_webview.bridge import FrontendBridge
-from src.ui_webview.state import BubbleState, ScreenshotSession, SelectionCandidate, UiState
+from src.ui_webview.state import BubbleState, ScreenshotSession, SelectionCandidate, SelectionFlowState, UiState
 
 
 class WordPackWebviewApp:
@@ -148,6 +150,9 @@ class WordPackWebviewApp:
         self._ai_probe_thread: threading.Thread | None = None
         self._bubble_state = BubbleState(mode=self.config.translation_mode)
         self._selection_candidate = SelectionCandidate()
+        self._selection_flow = SelectionFlowState()
+        self._selection_last_fingerprint = ""
+        self._selection_last_fingerprint_at = 0.0
         self._selection_icon_timer: threading.Timer | None = None
         self._selection_icon_hide_timer: threading.Timer | None = None
         self._selection_icon_anchor_pos: tuple[int, int] | None = None
@@ -155,6 +160,9 @@ class WordPackWebviewApp:
         self._selection_icon_retry = 0
         self._bubble_hide_timer: threading.Timer | None = None
         self._selection_icon_hover_armed = False
+        self._selection_hover_entered_at = 0.0
+        self._selection_hover_last_cursor: tuple[int, int] | None = None
+        self._selection_hover_last_at = 0.0
         self._screenshot_session: ScreenshotSession | None = None
         self._screenshot_session_seq = 0
         self._screenshot_background_path: Path | None = None
@@ -170,7 +178,9 @@ class WordPackWebviewApp:
         self._fb_last_lbtn_down = False
         self._fb_last_rbtn_down = False
         self._fb_lbtn_down_pos: tuple[int, int] | None = None
+        self._fb_lbtn_down_at = 0.0
         self._fb_last_lbtn_up_at = 0.0
+        self._fb_last_lbtn_up_pos: tuple[int, int] | None = None
         self._fb_lbtn_click_count = 0
         self._fb_last_ctrl_down = False
         self._fb_ctrl_combo_used = False
@@ -179,6 +189,8 @@ class WordPackWebviewApp:
         self._fb_last_combo_s = False
         self._last_selection_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
+        self._dpi_scale_cache = 1.0
+        self._dpi_scale_cached_at = 0.0
         self._main_window_geometry_before_zoom: tuple[int, int, int, int] | None = None
         self._hide_main_after_zoom_close = False
         self._main_compact = True
@@ -1644,14 +1656,27 @@ class WordPackWebviewApp:
 
         if show_bubble:
             preserve_existing_bubble = self.bubble_window is not None
+            bubble_anchor: tuple[int, int] | None = None
+            preserve_position = preserve_existing_bubble
+            preserve_height = preserve_existing_bubble
+            if action == "划词翻译":
+                payload = self._selection_candidate.payload if self._selection_candidate.payload else {}
+                if payload:
+                    anchor_x = int(payload.get("x", 0))
+                    anchor_y = int(payload.get("y", 0))
+                    if anchor_x or anchor_y:
+                        bubble_anchor = (anchor_x, anchor_y)
+                preserve_position = False
+                preserve_height = False
             self._show_bubble(
                 source_text=source_text,
                 result_text="",
                 pending=True,
                 action=action,
                 mode=mode,
-                preserve_position=preserve_existing_bubble,
-                preserve_height=preserve_existing_bubble,
+                anchor=bubble_anchor,
+                preserve_position=preserve_position,
+                preserve_height=preserve_height,
             )
 
         def worker() -> None:
@@ -1941,6 +1966,64 @@ class WordPackWebviewApp:
             icon_delay_ms = int(interaction.get("selection_icon_delay_ms", self.config.interaction.selection_icon_delay_ms))
         except Exception:
             icon_delay_ms = self.config.interaction.selection_icon_delay_ms
+        try:
+            drag_min_px = int(interaction.get("selection_drag_min_px", self.config.interaction.selection_drag_min_px))
+        except Exception:
+            drag_min_px = self.config.interaction.selection_drag_min_px
+        try:
+            click_pair_max_distance_px = int(
+                interaction.get("selection_click_pair_max_distance_px", self.config.interaction.selection_click_pair_max_distance_px)
+            )
+        except Exception:
+            click_pair_max_distance_px = self.config.interaction.selection_click_pair_max_distance_px
+        try:
+            hold_min_ms = int(interaction.get("selection_hold_min_ms", self.config.interaction.selection_hold_min_ms))
+        except Exception:
+            hold_min_ms = self.config.interaction.selection_hold_min_ms
+        try:
+            icon_arm_delay_ms = int(interaction.get("selection_icon_arm_delay_ms", self.config.interaction.selection_icon_arm_delay_ms))
+        except Exception:
+            icon_arm_delay_ms = self.config.interaction.selection_icon_arm_delay_ms
+        try:
+            verify_timeout_ms = int(interaction.get("selection_verify_timeout_ms", self.config.interaction.selection_verify_timeout_ms))
+        except Exception:
+            verify_timeout_ms = self.config.interaction.selection_verify_timeout_ms
+        try:
+            hover_dwell_ms = int(interaction.get("selection_hover_dwell_ms", self.config.interaction.selection_hover_dwell_ms))
+        except Exception:
+            hover_dwell_ms = self.config.interaction.selection_hover_dwell_ms
+        try:
+            hover_max_speed_px_s = int(
+                interaction.get("selection_hover_max_speed_px_s", self.config.interaction.selection_hover_max_speed_px_s)
+            )
+        except Exception:
+            hover_max_speed_px_s = self.config.interaction.selection_hover_max_speed_px_s
+        try:
+            candidate_dedupe_window_ms = int(
+                interaction.get(
+                    "selection_candidate_dedupe_window_ms",
+                    self.config.interaction.selection_candidate_dedupe_window_ms,
+                )
+            )
+        except Exception:
+            candidate_dedupe_window_ms = self.config.interaction.selection_candidate_dedupe_window_ms
+        try:
+            candidate_max_age_sec = float(
+                interaction.get("selection_candidate_max_age_sec", self.config.interaction.selection_candidate_max_age_sec)
+            )
+        except Exception:
+            candidate_max_age_sec = self.config.interaction.selection_candidate_max_age_sec
+
+        app_profiles_raw = interaction.get("app_profiles", self.config.interaction.app_profiles)
+        normalized_profiles: list[SelectionAppProfile] = []
+        if isinstance(app_profiles_raw, list):
+            for item in app_profiles_raw:
+                if isinstance(item, SelectionAppProfile):
+                    normalized = ConfigStore._normalize_selection_profile_item(asdict(item))
+                else:
+                    normalized = ConfigStore._normalize_selection_profile_item(item)
+                if normalized is not None:
+                    normalized_profiles.append(normalized)
 
         screenshot_enabled = bool(interaction.get("screenshot_enabled", self.config.interaction.screenshot_enabled))
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
@@ -1956,6 +2039,16 @@ class WordPackWebviewApp:
         self.config.interaction.screenshot_enabled = screenshot_enabled
         self.config.interaction.screenshot_hotkey = screenshot_hotkey
         self.config.interaction.selection_icon_delay_ms = max(0, min(5000, icon_delay_ms))
+        self.config.interaction.selection_drag_min_px = max(3, min(40, drag_min_px))
+        self.config.interaction.selection_click_pair_max_distance_px = max(4, min(40, click_pair_max_distance_px))
+        self.config.interaction.selection_hold_min_ms = max(0, min(300, hold_min_ms))
+        self.config.interaction.selection_icon_arm_delay_ms = max(0, min(800, icon_arm_delay_ms))
+        self.config.interaction.selection_verify_timeout_ms = max(20, min(300, verify_timeout_ms))
+        self.config.interaction.selection_hover_dwell_ms = max(0, min(500, hover_dwell_ms))
+        self.config.interaction.selection_hover_max_speed_px_s = max(120, min(5000, hover_max_speed_px_s))
+        self.config.interaction.selection_candidate_dedupe_window_ms = max(60, min(1500, candidate_dedupe_window_ms))
+        self.config.interaction.selection_candidate_max_age_sec = max(2.0, min(30.0, float(candidate_max_age_sec)))
+        self.config.interaction.app_profiles = normalized_profiles
         self.config.history.retention_days = retention_days if retention_days in {7, 30, 90} else 30
 
         if theme_mode not in {"system", "light", "dark"}:
@@ -2129,6 +2222,9 @@ class WordPackWebviewApp:
             self._selection_icon_anchor_pos = None
             self._selection_icon_shown_at = 0.0
             self._selection_icon_hover_armed = False
+            self._selection_hover_entered_at = 0.0
+            self._selection_hover_last_cursor = None
+            self._selection_hover_last_at = 0.0
             self._set_global_cursor_crosshair(True)
             self._suppress_selection_events(1.0)
 
@@ -2597,14 +2693,261 @@ class WordPackWebviewApp:
             self._bubble_hide_timer.cancel()
             self._bubble_hide_timer = None
 
+    def _selection_candidate_max_age_sec(self) -> float:
+        try:
+            value = float(self.config.interaction.selection_candidate_max_age_sec or 12.0)
+        except Exception:
+            value = 12.0
+        return max(2.0, min(30.0, value))
+
+    def _is_selection_candidate_fresh(self, candidate: SelectionCandidate | None) -> bool:
+        if candidate is None:
+            return False
+        return candidate.is_fresh(max_age_sec=self._selection_candidate_max_age_sec())
+
+    def _dpi_scale(self) -> float:
+        now = time.time()
+        if self._dpi_scale_cached_at > 0 and (now - self._dpi_scale_cached_at) <= 5.0:
+            return self._dpi_scale_cache
+        try:
+            scale = float(get_system_dpi_scale())
+        except Exception:
+            scale = 1.0
+        if scale <= 0:
+            scale = 1.0
+        self._dpi_scale_cache = max(0.75, min(4.0, scale))
+        self._dpi_scale_cached_at = now
+        return self._dpi_scale_cache
+
+    def _scale_px(self, value: int) -> int:
+        base = max(1, int(value))
+        return max(1, int(round(base * self._dpi_scale())))
+
+    def _selection_drag_threshold_px(self) -> int:
+        # Keep user-config threshold as baseline, but relax a bit in runtime to
+        # avoid missed captures on short-yet-real text selections.
+        base = int(self.config.interaction.selection_drag_min_px or 9)
+        return max(5, min(40, base - 2))
+
+    def _selection_click_pair_distance_px(self) -> int:
+        return max(4, int(self.config.interaction.selection_click_pair_max_distance_px or 14))
+
+    def _selection_icon_arm_delay_sec(self) -> float:
+        try:
+            value = int(self.config.interaction.selection_icon_arm_delay_ms or 150)
+        except Exception:
+            value = 150
+        return max(0.0, min(0.8, value / 1000.0))
+
+    def _selection_icon_effective_trigger(self, candidate: SelectionCandidate | None = None) -> str:
+        icon_trigger = ""
+        if candidate is not None and candidate.icon_trigger in {"click", "hover"}:
+            icon_trigger = str(candidate.icon_trigger)
+        if not icon_trigger:
+            icon_trigger = str(self.config.interaction.selection_icon_trigger or "click")
+        return "hover" if icon_trigger == "hover" else "click"
+
+    @staticmethod
+    def _normalize_executable_name(executable: str | None) -> str:
+        raw = str(executable or "").strip().lower()
+        if not raw:
+            return ""
+        try:
+            return Path(raw).name.lower()
+        except Exception:
+            return raw
+
+    def _resolve_selection_profile(self, executable: str | None = None) -> tuple[str, str, str]:
+        global_mode = str(self.config.interaction.selection_trigger_mode or "icon").strip().lower()
+        if global_mode not in {"icon", "double_ctrl"}:
+            global_mode = "icon"
+        global_icon_trigger = str(self.config.interaction.selection_icon_trigger or "click").strip().lower()
+        if global_icon_trigger not in {"click", "hover"}:
+            global_icon_trigger = "click"
+        # User-selected global interaction mode is authoritative.
+        exe = self._normalize_executable_name(executable or get_foreground_process_name())
+        return global_mode, global_icon_trigger, exe
+
+    @staticmethod
+    def _selection_payload_int(payload: dict[str, Any], key: str, default: int = 0) -> int:
+        try:
+            return int(payload.get(key, default))
+        except Exception:
+            return int(default)
+
+    def _selection_candidate_fingerprint(self, payload: dict[str, Any], *, executable: str, trigger_mode: str) -> str:
+        x = self._selection_payload_int(payload, "x")
+        y = self._selection_payload_int(payload, "y")
+        down_x = self._selection_payload_int(payload, "down_x", x)
+        down_y = self._selection_payload_int(payload, "down_y", y)
+        moved = self._selection_payload_int(payload, "moved", abs(x - down_x) + abs(y - down_y))
+        click_count = self._selection_payload_int(payload, "click_count", 0)
+        hold_ms = self._selection_payload_int(payload, "hold_ms", 0)
+        quant = max(1, self._scale_px(4))
+        parts = [
+            str(executable or ""),
+            str(trigger_mode or ""),
+            str(x // quant),
+            str(y // quant),
+            str(down_x // quant),
+            str(down_y // quant),
+            str(moved // quant),
+            str(click_count),
+            str(hold_ms // 20),
+        ]
+        return ":".join(parts)
+
+    def _is_duplicate_selection_candidate(self, fingerprint: str, now: float) -> bool:
+        if not fingerprint:
+            return False
+        try:
+            dedupe_window = int(self.config.interaction.selection_candidate_dedupe_window_ms or 320)
+        except Exception:
+            dedupe_window = 320
+        # Dedupe is only for near-simultaneous hook/poll duplicates, not for
+        # separate user actions in quick succession.
+        dedupe_sec = max(0.04, min(0.18, dedupe_window / 1000.0))
+        if fingerprint == self._selection_last_fingerprint and (now - self._selection_last_fingerprint_at) <= dedupe_sec:
+            return True
+        self._selection_last_fingerprint = fingerprint
+        self._selection_last_fingerprint_at = now
+        return False
+
+    def _set_selection_flow(self, phase: str, *, reason: str = "", candidate: SelectionCandidate | None = None) -> None:
+        now = time.time()
+        with self.lock:
+            token = int(self._selection_flow.token or 0)
+            if candidate is not None and candidate.fingerprint and candidate.fingerprint != self._selection_flow.candidate_fingerprint:
+                token += 1
+            elif phase == "captured":
+                token += 1
+            self._selection_flow = SelectionFlowState(
+                phase=str(phase or "idle"),
+                token=token,
+                updated_at=now,
+                candidate_fingerprint=(candidate.fingerprint if candidate is not None else self._selection_flow.candidate_fingerprint),
+                reason=str(reason or ""),
+            )
+
+    def _is_candidate_signal_strong(self, candidate: SelectionCandidate) -> bool:
+        moved = int(candidate.moved_px or 0)
+        payload = candidate.payload or {}
+        click_count = self._selection_payload_int(payload, "click_count", 0)
+        if moved >= self._selection_drag_threshold_px():
+            return True
+        if click_count >= 2:
+            return True
+        return False
+
+    def _build_selection_candidate(self, payload: dict[str, Any] | None, *, now: float | None = None) -> SelectionCandidate | None:
+        data: dict[str, Any] = payload if isinstance(payload, dict) else {}
+        captured_at = time.time() if now is None else float(now)
+
+        x = self._selection_payload_int(data, "x", 0)
+        y = self._selection_payload_int(data, "y", 0)
+        down_x = self._selection_payload_int(data, "down_x", x)
+        down_y = self._selection_payload_int(data, "down_y", y)
+        moved = self._selection_payload_int(data, "moved", abs(x - down_x) + abs(y - down_y))
+        click_count = self._selection_payload_int(data, "click_count", 0)
+        hold_ms = self._selection_payload_int(data, "hold_ms", 0)
+        up_at = float(data.get("up_ts", captured_at) or captured_at)
+        down_at_default = up_at - (max(0, hold_ms) / 1000.0)
+        down_at = float(data.get("down_ts", down_at_default) or down_at_default)
+
+        effective_mode, effective_icon_trigger, executable = self._resolve_selection_profile()
+        if effective_mode == "disabled":
+            self._set_selection_flow("cancelled", reason="profile-disabled")
+            return None
+
+        candidate_payload = {
+            "x": int(x),
+            "y": int(y),
+            "down_x": int(down_x),
+            "down_y": int(down_y),
+            "moved": int(moved),
+            "click_count": int(click_count),
+            "hold_ms": int(hold_ms),
+            "down_ts": float(down_at),
+            "up_ts": float(up_at),
+        }
+        fingerprint = self._selection_candidate_fingerprint(
+            candidate_payload,
+            executable=executable,
+            trigger_mode=effective_mode,
+        )
+        return SelectionCandidate(
+            captured_at=captured_at,
+            payload=candidate_payload,
+            text="",
+            down_at=float(down_at),
+            up_at=float(up_at),
+            moved_px=int(moved),
+            executable=executable,
+            trigger_mode=effective_mode,
+            icon_trigger=effective_icon_trigger,
+            fingerprint=fingerprint,
+        )
+
+    def _can_trigger_double_ctrl_selection(self) -> bool:
+        if not bool(self.config.interaction.selection_enabled):
+            return False
+        candidate = self._selection_candidate
+        if self._is_selection_candidate_fresh(candidate):
+            return str(candidate.trigger_mode or "icon") == "double_ctrl"
+        mode, _icon_trigger, _exe = self._resolve_selection_profile()
+        return mode == "double_ctrl"
+
+    def _ensure_selection_candidate_for_translate(self) -> SelectionCandidate | None:
+        candidate = self._selection_candidate
+        if self._is_selection_candidate_fresh(candidate):
+            return candidate
+
+        cursor_x, cursor_y = get_cursor_position()
+        fallback_candidate = self._build_selection_candidate(
+            {
+                "x": int(cursor_x),
+                "y": int(cursor_y),
+                "down_x": int(cursor_x),
+                "down_y": int(cursor_y),
+                "moved": 0,
+                "click_count": 0,
+                "hold_ms": 0,
+                "up_ts": time.time(),
+            }
+        )
+        if fallback_candidate is None:
+            return None
+        with self.lock:
+            self._selection_candidate = fallback_candidate
+        return fallback_candidate
+
+    def _fast_verify_selection_candidate(self, candidate: SelectionCandidate) -> bool:
+        timeout_ms = max(20, min(300, int(self.config.interaction.selection_verify_timeout_ms or 80)))
+        result = self.selection_capture.probe_fast(candidate.payload or {}, timeout_ms=timeout_ms)
+        candidate.verify_reason = str(result.reason or "")
+        candidate.verified_at = time.time()
+
+        if result.has_text():
+            candidate.text = str(result.text or "").strip()
+            candidate.verified_has_text = True
+            return True
+
+        candidate.verified_has_text = False
+        if result.reason == "password-field":
+            return False
+        if result.reason in {"uia-module-missing", "uia-module-import-failed", "uia-internal-error"}:
+            candidate.verified_has_text = None
+            return True
+        return self._is_candidate_signal_strong(candidate)
+
     def trigger_selection_translate(self) -> dict[str, Any]:
         self._selection_icon_hover_armed = False
         self.close_window("icon")
         return self._translate_pending_selection()
 
     def _translate_pending_selection(self) -> dict[str, Any]:
-        candidate = self._selection_candidate
-        if not candidate.is_fresh():
+        candidate = self._ensure_selection_candidate_for_translate()
+        if not self._is_selection_candidate_fresh(candidate):
             message = "未检测到最近选区，请重新划词"
             self.set_status(message)
             self._show_bubble(
@@ -2616,6 +2959,7 @@ class WordPackWebviewApp:
             )
             return {"ok": False, "message": message}
 
+        assert candidate is not None
         text = candidate.text.strip() or self._capture_selected_text(candidate.payload).strip()
         if not text:
             message = "未识别到可翻译文本，请重新划词后再试"
@@ -2630,6 +2974,7 @@ class WordPackWebviewApp:
             return {"ok": False, "message": message}
 
         self._selection_candidate.text = text
+        self._set_selection_flow("triggered", reason="translate-start", candidate=candidate)
         return self._start_translate(text=text, action="划词翻译", show_bubble=True)
 
     def _capture_selected_text(self, payload: dict[str, int] | None) -> str:
@@ -2637,7 +2982,7 @@ class WordPackWebviewApp:
             self._capture_selection_by_ctrl_c,
             payload=payload,
             wait_sec=0.1,
-            allow_unchanged=False,
+            allow_unchanged=True,
         )
         if result.has_text():
             self.logger.info(
@@ -2749,11 +3094,7 @@ class WordPackWebviewApp:
         if event == "double_ctrl_selection":
             if self._screenshot_session is not None or self._selection_events_suppressed():
                 return
-            if (
-                self.config.interaction.selection_enabled
-                and self.config.interaction.selection_trigger_mode == "double_ctrl"
-                and not self._is_our_window_foreground()
-            ):
+            if self._can_trigger_double_ctrl_selection() and not self._is_our_window_foreground():
                 self._translate_pending_selection()
             return
 
@@ -2770,7 +3111,7 @@ class WordPackWebviewApp:
                 self.start_screenshot_capture(show_bubble=True)
             return
 
-    def _handle_selection_candidate(self, payload) -> None:
+    def _handle_selection_candidate(self, candidate: SelectionCandidate) -> None:
         if self._screenshot_session is not None:
             return
         if self._selection_events_suppressed():
@@ -2780,26 +3121,16 @@ class WordPackWebviewApp:
         if time.time() - self._last_window_interaction_at <= 0.75 and self._is_our_window_foreground():
             return
 
-        data = payload if isinstance(payload, dict) else {}
-        candidate = SelectionCandidate(
-            captured_at=time.time(),
-            payload={
-                "x": int(data.get("x", 0)),
-                "y": int(data.get("y", 0)),
-                "down_x": int(data.get("down_x", data.get("x", 0))),
-                "down_y": int(data.get("down_y", data.get("y", 0))),
-            },
-            text="",
-        )
         with self.lock:
             self._selection_candidate = candidate
+        self._set_selection_flow("captured", reason=f"mode={candidate.trigger_mode}", candidate=candidate)
         self._selection_icon_retry = 0
 
-        if self.config.interaction.selection_trigger_mode == "icon":
+        if candidate.trigger_mode == "icon":
             # Replace stale/previous icon immediately when a new selection is captured.
             if self._native_icon_overlay.is_visible():
                 self.close_window("icon")
-            self.set_status("已捕获选区，即将显示图标")
+            self.set_status("已捕获选区，正在确认文本")
             self._schedule_selection_icon()
         else:
             self.set_status("已捕获选区，双击 Ctrl 触发翻译")
@@ -2809,10 +3140,19 @@ class WordPackWebviewApp:
         now = time.time()
         if self._selection_events_suppressed(now):
             return
-        if now - self._last_selection_trigger_at < 0.08:
+        if now - self._last_selection_trigger_at < 0.03:
+            return
+        candidate = self._build_selection_candidate(payload, now=now)
+        if candidate is None:
+            return
+        if not self._is_candidate_signal_strong(candidate):
+            self._set_selection_flow("cancelled", reason="weak-signal", candidate=candidate)
+            return
+        if self._is_duplicate_selection_candidate(candidate.fingerprint, now):
+            self._set_selection_flow("cancelled", reason="deduped", candidate=candidate)
             return
         self._last_selection_trigger_at = now
-        self._handle_selection_candidate(payload)
+        self._handle_selection_candidate(candidate)
 
     def _schedule_selection_icon(self, delay_sec: float | None = None) -> None:
         self._cancel_selection_icon_timer()
@@ -2843,20 +3183,50 @@ class WordPackWebviewApp:
     def _maybe_show_selection_icon(self) -> None:
         self._selection_icon_timer = None
         candidate = self._selection_candidate
-        if not candidate.is_fresh():
+        if not self._is_selection_candidate_fresh(candidate):
+            self._set_selection_flow("cancelled", reason="candidate-expired", candidate=candidate)
+            return
+        if str(candidate.trigger_mode or "icon") != "icon":
             return
         if self._native_icon_overlay.is_visible():
             return
+
+        arm_delay = self._selection_icon_arm_delay_sec()
+        anchor_time = float(candidate.up_at or candidate.captured_at or time.time())
+        remaining = arm_delay - max(0.0, time.time() - anchor_time)
+        if remaining > 0.01:
+            self._schedule_selection_icon(remaining)
+            return
+
+        if candidate.verified_at <= 0:
+            verify_ok = self._fast_verify_selection_candidate(candidate)
+            if not verify_ok:
+                self._set_selection_flow(
+                    "cancelled",
+                    reason=f"preverify-failed:{candidate.verify_reason or 'unknown'}",
+                    candidate=candidate,
+                )
+                return
+            self._set_selection_flow("verified", reason=candidate.verify_reason or "ok", candidate=candidate)
+
         if time.time() - self._last_window_interaction_at <= 0.75 and self._is_our_window_foreground():
             if self._selection_icon_retry < 18:
                 self._selection_icon_retry += 1
                 self._schedule_selection_icon(0.12)
             return
 
-        self._selection_icon_retry = 0
-        self._show_selection_icon(candidate.payload or {})
+        shown = self._show_selection_icon(candidate.payload or {})
+        if shown:
+            self._selection_icon_retry = 0
+            self._set_selection_flow("icon_shown", reason="icon-visible", candidate=candidate)
+            return
+        if self._selection_icon_retry < 10:
+            self._selection_icon_retry += 1
+            self._schedule_selection_icon(0.08)
+            return
+        self._set_selection_flow("cancelled", reason="icon-show-failed", candidate=candidate)
 
-    def _show_selection_icon(self, payload: dict[str, int]) -> None:
+    def _show_selection_icon(self, payload: dict[str, int]) -> bool:
         bounds = get_virtual_screen_bounds()
         cursor_x, cursor_y = get_cursor_position()
         anchor_x = int(payload.get("x", cursor_x))
@@ -2870,15 +3240,21 @@ class WordPackWebviewApp:
         self.close_window("icon")
         self._native_icon_overlay.show(int(x), int(y))
         if not self._native_icon_overlay.is_visible():
-            for _ in range(2):
-                time.sleep(0.02)
+            for _ in range(4):
+                time.sleep(0.03)
                 self._native_icon_overlay.show(int(x), int(y))
                 if self._native_icon_overlay.is_visible():
                     break
+        if not self._native_icon_overlay.is_visible():
+            return False
         self._selection_icon_anchor_pos = (int(x + (self.ICON_WIDTH / 2)), int(y + (self.ICON_HEIGHT / 2)))
         self._selection_icon_shown_at = time.time()
         self._selection_icon_hover_armed = True
+        self._selection_hover_entered_at = 0.0
+        self._selection_hover_last_cursor = None
+        self._selection_hover_last_at = 0.0
         self._schedule_selection_icon_auto_hide()
+        return True
 
     def close_window(self, kind: str) -> dict[str, Any]:
         if kind == "main":
@@ -2908,6 +3284,9 @@ class WordPackWebviewApp:
             self._selection_icon_anchor_pos = None
             self._selection_icon_shown_at = 0.0
             self._selection_icon_hover_armed = False
+            self._selection_hover_entered_at = 0.0
+            self._selection_hover_last_cursor = None
+            self._selection_hover_last_at = 0.0
         elif kind == "screenshot":
             session = self._screenshot_session
             self._close_screenshot_window()
@@ -2936,11 +3315,11 @@ class WordPackWebviewApp:
         self._input_poll_thread.start()
 
     def _selection_icon_cancel_distance(self) -> int:
-        return 320
+        return max(220, self._scale_px(320))
 
-    @staticmethod
-    def _selection_icon_trigger_distance() -> int:
-        return 14
+    def _selection_icon_trigger_distance(self) -> int:
+        base = max(10, int(self.config.interaction.selection_click_pair_max_distance_px or 14))
+        return max(10, self._scale_px(base))
 
     def _is_cursor_on_selection_anchor(self, cursor_pos: tuple[int, int], payload: dict[str, int] | None) -> bool:
         if not payload:
@@ -3083,20 +3462,55 @@ class WordPackWebviewApp:
             self.close_window("icon")
 
     def _maybe_trigger_selection_icon_hover(self, cursor_pos: tuple[int, int]) -> None:
-        if self.config.interaction.selection_icon_trigger != "hover":
-            return
         if not self._selection_icon_hover_armed:
             return
         if not self._native_icon_overlay.is_visible() or self._selection_icon_anchor_pos is None:
             return
 
+        candidate = self._selection_candidate
+        if self._selection_icon_effective_trigger(candidate) != "hover":
+            return
+
         dx = int(cursor_pos[0]) - int(self._selection_icon_anchor_pos[0])
         dy = int(cursor_pos[1]) - int(self._selection_icon_anchor_pos[1])
-        trigger_radius = max(10, (self.ICON_WIDTH // 2) + 2)
-        if (dx * dx + dy * dy) > (trigger_radius * trigger_radius):
+        # Hover should match "move to icon": use icon-body rectangle with tiny
+        # tolerance instead of large radius.
+        tol = 2
+        half_w = max(8, int(self.ICON_WIDTH // 2) + tol)
+        half_h = max(8, int(self.ICON_HEIGHT // 2) + tol)
+        inside = abs(dx) <= half_w and abs(dy) <= half_h
+        now = time.time()
+        if not inside:
+            self._selection_hover_entered_at = 0.0
+            self._selection_hover_last_cursor = cursor_pos
+            self._selection_hover_last_at = now
+            return
+
+        speed_px_s = 0.0
+        if self._selection_hover_last_cursor is not None and self._selection_hover_last_at > 0:
+            step = abs(int(cursor_pos[0]) - int(self._selection_hover_last_cursor[0])) + abs(
+                int(cursor_pos[1]) - int(self._selection_hover_last_cursor[1])
+            )
+            dt = now - self._selection_hover_last_at
+            if dt > 0:
+                speed_px_s = step / max(dt, 0.001)
+        self._selection_hover_last_cursor = cursor_pos
+        self._selection_hover_last_at = now
+
+        max_speed = max(120, int(self.config.interaction.selection_hover_max_speed_px_s or 900))
+        if speed_px_s > max_speed:
+            self._selection_hover_entered_at = 0.0
+            return
+
+        dwell_sec = max(0.0, min(0.5, int(self.config.interaction.selection_hover_dwell_ms or 130) / 1000.0))
+        if self._selection_hover_entered_at <= 0:
+            self._selection_hover_entered_at = now
+            return
+        if dwell_sec > 0 and (now - self._selection_hover_entered_at) < dwell_sec:
             return
 
         self._selection_icon_hover_armed = False
+        self._selection_hover_entered_at = 0.0
         threading.Thread(target=self.trigger_selection_translate, daemon=True).start()
 
     def _maybe_hide_bubble_by_cursor(self, cursor_pos: tuple[int, int], cursor_step: int, cursor_dt: float) -> None:
@@ -3220,6 +3634,7 @@ class WordPackWebviewApp:
 
                 if not self._fb_last_lbtn_down and lbtn_down:
                     self._fb_lbtn_down_pos = (cursor_x, cursor_y)
+                    self._fb_lbtn_down_at = now
 
                 if self._fb_last_lbtn_down and not lbtn_down:
                     if (not screenshot_guard) and self.config.interaction.selection_enabled:
@@ -3227,14 +3642,27 @@ class WordPackWebviewApp:
                         dx = abs(cursor_x - down[0]) if down else 0
                         dy = abs(cursor_y - down[1]) if down else 0
                         moved = dx + dy
+                        hold_ms = int(max(0.0, (now - float(self._fb_lbtn_down_at or now))) * 1000.0)
+                        pair_distance = 0
+                        if self._fb_last_lbtn_up_pos is not None:
+                            pair_distance = abs(cursor_x - int(self._fb_last_lbtn_up_pos[0])) + abs(
+                                cursor_y - int(self._fb_last_lbtn_up_pos[1])
+                            )
 
-                        if now - self._fb_last_lbtn_up_at <= 0.35:
+                        if (
+                            now - self._fb_last_lbtn_up_at <= 0.35
+                            and pair_distance <= self._selection_click_pair_distance_px()
+                        ):
                             self._fb_lbtn_click_count += 1
                         else:
                             self._fb_lbtn_click_count = 1
                         self._fb_last_lbtn_up_at = now
+                        self._fb_last_lbtn_up_pos = (cursor_x, cursor_y)
 
-                        if moved >= 3 or self._fb_lbtn_click_count >= 2:
+                        if (
+                            moved >= self._selection_drag_threshold_px()
+                            or self._fb_lbtn_click_count >= 2
+                        ):
                             down_x = int(down[0]) if down else int(cursor_x)
                             down_y = int(down[1]) if down else int(cursor_y)
                             self._emit_selection_candidate(
@@ -3243,10 +3671,16 @@ class WordPackWebviewApp:
                                     "y": int(cursor_y),
                                     "down_x": down_x,
                                     "down_y": down_y,
+                                    "moved": int(moved),
+                                    "click_count": int(self._fb_lbtn_click_count),
+                                    "down_ts": float(self._fb_lbtn_down_at or 0.0),
+                                    "up_ts": float(now),
+                                    "hold_ms": int(hold_ms),
                                 }
                             )
                             self._fb_lbtn_click_count = 0
                     self._fb_lbtn_down_pos = None
+                    self._fb_lbtn_down_at = 0.0
 
                 if (not screenshot_guard) and ctrl_down and not self._fb_last_ctrl_down:
                     self._fb_ctrl_combo_used = False
@@ -3256,11 +3690,7 @@ class WordPackWebviewApp:
 
                 if (not screenshot_guard) and self._fb_last_ctrl_down and not ctrl_down:
                     if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
-                        if (
-                            self.config.interaction.selection_enabled
-                            and self.config.interaction.selection_trigger_mode == "double_ctrl"
-                            and not self._is_our_window_foreground()
-                        ):
+                        if self._can_trigger_double_ctrl_selection() and not self._is_our_window_foreground():
                             self._translate_pending_selection()
                     if not self._fb_ctrl_combo_used:
                         self._fb_last_ctrl_tap_at = now

@@ -41,6 +41,16 @@ class SelectionCandidate:
     captured_at: float = 0.0
     payload: dict[str, int] | None = None
     text: str = ""
+    down_at: float = 0.0
+    up_at: float = 0.0
+    moved_px: int = 0
+    executable: str = ""
+    trigger_mode: str = "icon"
+    icon_trigger: str = "click"
+    fingerprint: str = ""
+    verify_reason: str = ""
+    verified_has_text: bool | None = None
+    verified_at: float = 0.0
 
     def is_fresh(self, max_age_sec: float = 12.0) -> bool:
         import time
@@ -55,3 +65,12 @@ class ScreenshotSession:
     show_bubble: bool
     main_was_hidden: bool
     started_at: float = 0.0
+
+
+@dataclass
+class SelectionFlowState:
+    phase: str = "idle"  # idle | captured | armed | verified | icon_shown | triggered | cancelled
+    token: int = 0
+    updated_at: float = 0.0
+    candidate_fingerprint: str = ""
+    reason: str = ""

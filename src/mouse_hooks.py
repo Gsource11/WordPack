@@ -56,6 +56,8 @@ class MouseHookManager:
 
         self._last_left_up = 0.0
         self._last_down_pos: tuple[int, int] | None = None
+        self._last_down_at = 0.0
+        self._last_up_pos: tuple[int, int] | None = None
         self._click_count = 0
 
     def start(self) -> None:
@@ -103,16 +105,21 @@ class MouseHookManager:
 
             if w_param == WM_LBUTTONDOWN:
                 self._last_down_pos = (x, y)
+                self._last_down_at = now
 
             if w_param == WM_LBUTTONUP:
-                if now - self._last_left_up <= 0.35:
+                pair_distance = 0
+                if self._last_up_pos is not None:
+                    pair_distance = abs(x - int(self._last_up_pos[0])) + abs(y - int(self._last_up_pos[1]))
+                if now - self._last_left_up <= 0.35 and pair_distance <= 28:
                     self._click_count += 1
                 else:
                     self._click_count = 1
 
                 down = self._last_down_pos
                 moved = abs(x - down[0]) + abs(y - down[1]) if down else 0
-                should_emit = moved >= 3 or self._click_count >= 2
+                hold_ms = int(max(0.0, (now - float(self._last_down_at or now))) * 1000.0)
+                should_emit = moved >= 1 or self._click_count >= 2
                 if should_emit:
                     down_x = int(down[0]) if down else int(x)
                     down_y = int(down[1]) if down else int(y)
@@ -121,6 +128,11 @@ class MouseHookManager:
                         "y": int(y),
                         "down_x": down_x,
                         "down_y": down_y,
+                        "moved": int(moved),
+                        "click_count": int(self._click_count),
+                        "down_ts": float(self._last_down_at or 0.0),
+                        "up_ts": float(now),
+                        "hold_ms": int(hold_ms),
                         "ts": now,
                     }
                     try:
@@ -131,6 +143,8 @@ class MouseHookManager:
                     self._click_count = 0
 
                 self._last_left_up = now
+                self._last_up_pos = (x, y)
                 self._last_down_pos = None
+                self._last_down_at = 0.0
 
         return user32.CallNextHookEx(self._mouse_hook, n_code, w_param, l_param)

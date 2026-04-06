@@ -22,6 +22,13 @@ class DictionaryConfig:
 
 
 @dataclass
+class SelectionAppProfile:
+    executable: str = ""
+    mode: str = "inherit"  # inherit | icon | double_ctrl | disabled
+    icon_trigger: str = "inherit"  # inherit | click | hover
+
+
+@dataclass
 class InteractionConfig:
     selection_enabled: bool = True
     selection_trigger_mode: str = "icon"  # icon | double_ctrl
@@ -29,6 +36,16 @@ class InteractionConfig:
     screenshot_enabled: bool = True
     screenshot_hotkey: str = "Ctrl+Alt+S"
     selection_icon_delay_ms: int = 1500
+    selection_drag_min_px: int = 9
+    selection_click_pair_max_distance_px: int = 14
+    selection_hold_min_ms: int = 35
+    selection_icon_arm_delay_ms: int = 150
+    selection_verify_timeout_ms: int = 80
+    selection_hover_dwell_ms: int = 130
+    selection_hover_max_speed_px_s: int = 900
+    selection_candidate_dedupe_window_ms: int = 320
+    selection_candidate_max_age_sec: float = 12.0
+    app_profiles: list[SelectionAppProfile] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +80,27 @@ class ConfigStore:
         mode = str(value or "dictionary").strip().lower()
         return mode if mode in {"dictionary", "ai"} else "dictionary"
 
+    @staticmethod
+    def _default_selection_app_profiles() -> list[SelectionAppProfile]:
+        # Keep empty by default: user global mode should remain authoritative unless
+        # the user explicitly creates per-app overrides.
+        return []
+
+    @staticmethod
+    def _normalize_selection_profile_item(item: object) -> SelectionAppProfile | None:
+        if not isinstance(item, dict):
+            return None
+        executable = str(item.get("executable", "") or "").strip().lower()
+        mode = str(item.get("mode", "inherit") or "inherit").strip().lower()
+        icon_trigger = str(item.get("icon_trigger", "inherit") or "inherit").strip().lower()
+        if not executable:
+            return None
+        if mode not in {"inherit", "icon", "double_ctrl", "disabled"}:
+            mode = "inherit"
+        if icon_trigger not in {"inherit", "click", "hover"}:
+            icon_trigger = "inherit"
+        return SelectionAppProfile(executable=executable, mode=mode, icon_trigger=icon_trigger)
+
     def load(self) -> AppConfig:
         if not self.config_path.exists():
             cfg = AppConfig()
@@ -81,6 +119,13 @@ class ConfigStore:
         # Backward compatibility with previous keys.
         legacy_selection_enabled = interaction_raw.get("selection_mouse_enabled", True)
         legacy_screenshot_enabled = interaction_raw.get("screenshot_hotkey_enabled", True)
+        raw_profiles = interaction_raw.get("app_profiles")
+        profile_items: list[SelectionAppProfile] = []
+        if isinstance(raw_profiles, list):
+            for item in raw_profiles:
+                normalized = self._normalize_selection_profile_item(item)
+                if normalized is not None:
+                    profile_items.append(normalized)
 
         cfg = AppConfig(
             translation_mode=self._normalize_translation_mode(raw.get("translation_mode", "dictionary")),
@@ -114,6 +159,16 @@ class ConfigStore:
                     or ""
                 ).strip(),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
+                selection_drag_min_px=int(interaction_raw.get("selection_drag_min_px", 9) or 9),
+                selection_click_pair_max_distance_px=int(interaction_raw.get("selection_click_pair_max_distance_px", 14) or 14),
+                selection_hold_min_ms=int(interaction_raw.get("selection_hold_min_ms", 35) or 35),
+                selection_icon_arm_delay_ms=int(interaction_raw.get("selection_icon_arm_delay_ms", 150) or 150),
+                selection_verify_timeout_ms=int(interaction_raw.get("selection_verify_timeout_ms", 80) or 80),
+                selection_hover_dwell_ms=int(interaction_raw.get("selection_hover_dwell_ms", 130) or 130),
+                selection_hover_max_speed_px_s=int(interaction_raw.get("selection_hover_max_speed_px_s", 900) or 900),
+                selection_candidate_dedupe_window_ms=int(interaction_raw.get("selection_candidate_dedupe_window_ms", 320) or 320),
+                selection_candidate_max_age_sec=float(interaction_raw.get("selection_candidate_max_age_sec", 12.0) or 12.0),
+                app_profiles=profile_items,
             ),
             history=HistoryConfig(
                 retention_days=int(history_raw.get("retention_days", 30) or 30),
@@ -133,6 +188,28 @@ class ConfigStore:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
         cfg.interaction.selection_icon_delay_ms = max(0, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
+        cfg.interaction.selection_drag_min_px = max(3, min(40, int(cfg.interaction.selection_drag_min_px or 9)))
+        cfg.interaction.selection_click_pair_max_distance_px = max(4, min(40, int(cfg.interaction.selection_click_pair_max_distance_px or 14)))
+        cfg.interaction.selection_hold_min_ms = max(0, min(300, int(cfg.interaction.selection_hold_min_ms or 35)))
+        cfg.interaction.selection_icon_arm_delay_ms = max(0, min(800, int(cfg.interaction.selection_icon_arm_delay_ms or 150)))
+        cfg.interaction.selection_verify_timeout_ms = max(20, min(300, int(cfg.interaction.selection_verify_timeout_ms or 80)))
+        cfg.interaction.selection_hover_dwell_ms = max(0, min(500, int(cfg.interaction.selection_hover_dwell_ms or 130)))
+        cfg.interaction.selection_hover_max_speed_px_s = max(120, min(5000, int(cfg.interaction.selection_hover_max_speed_px_s or 900)))
+        cfg.interaction.selection_candidate_dedupe_window_ms = max(60, min(1500, int(cfg.interaction.selection_candidate_dedupe_window_ms or 320)))
+        try:
+            cfg.interaction.selection_candidate_max_age_sec = float(cfg.interaction.selection_candidate_max_age_sec or 12.0)
+        except Exception:
+            cfg.interaction.selection_candidate_max_age_sec = 12.0
+        cfg.interaction.selection_candidate_max_age_sec = max(2.0, min(30.0, cfg.interaction.selection_candidate_max_age_sec))
+        normalized_profiles: list[SelectionAppProfile] = []
+        for item in cfg.interaction.app_profiles or []:
+            if isinstance(item, SelectionAppProfile):
+                normalized = self._normalize_selection_profile_item(asdict(item))
+            else:
+                normalized = self._normalize_selection_profile_item(item)
+            if normalized is not None:
+                normalized_profiles.append(normalized)
+        cfg.interaction.app_profiles = normalized_profiles
         if cfg.history.retention_days not in {7, 30, 90}:
             cfg.history.retention_days = 30
         cfg.openai.multi_candidate_count = max(2, min(3, int(cfg.openai.multi_candidate_count or 3)))
