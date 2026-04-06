@@ -276,7 +276,7 @@ body.view-main .window-card {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  cursor: move;
+  cursor: default;
 }
 
 .drag-row {
@@ -287,7 +287,7 @@ body.view-main .window-card {
 }
 
 .pywebview-drag-region {
-  cursor: move;
+  cursor: default;
 }
 
 .app-badge {
@@ -1146,7 +1146,7 @@ body.view-main .modal-panel {
 }
 
 [data-drag-handle] {
-  cursor: move;
+  cursor: default;
   user-select: none;
   -webkit-user-select: none;
 }
