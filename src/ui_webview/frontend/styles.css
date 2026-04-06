@@ -2547,6 +2547,8 @@ body[data-theme="dark"].view-bubble .bubble-arrow {
   font-size: 13px;
   font-weight: 600;
   text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .tray-item .icon {
@@ -2558,6 +2560,11 @@ body[data-theme="dark"].view-bubble .bubble-arrow {
 
 .tray-item:hover,
 .tray-item:focus-visible {
+  border-color: rgba(11, 19, 32, 0.08);
+  outline: none;
+}
+
+.tray-item:hover {
   background: rgba(11, 19, 32, 0.06);
   border-color: rgba(11, 19, 32, 0.08);
   outline: none;
@@ -2622,8 +2629,11 @@ body[data-theme="dark"].view-tray .tray-item .icon {
 
 body[data-theme="dark"].view-tray .tray-item:hover,
 body[data-theme="dark"].view-tray .tray-item:focus-visible {
-  background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.16);
+}
+
+body[data-theme="dark"].view-tray .tray-item:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 body[data-theme="dark"].view-tray .tray-toggle-pill {
@@ -2639,6 +2649,14 @@ body[data-theme="dark"].view-tray .tray-toggle-pill.on {
 body[data-theme="dark"].view-tray .tray-item.danger,
 body[data-theme="dark"].view-tray .tray-item.danger .icon {
   color: #ff9f93;
+}
+
+.tray-card.no-hover .tray-item:hover,
+.tray-card.no-hover .tray-item:focus-visible,
+.tray-card.no-hover .tray-item:active {
+  background: transparent !important;
+  border-color: transparent !important;
+  outline: none !important;
 }
 
 .screenshot-shell {

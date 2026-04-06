@@ -139,6 +139,7 @@
   const scrollTailTolerance = 18;
   let tooltipEl = null;
   let tooltipTarget = null;
+  let trayHoverUnlockCleanup = null;
 
   const choiceGroupMarkup = (field, currentValue, options) => `
     <div class="choice-group">
@@ -896,6 +897,18 @@
   }
 
   function renderTray() {
+    if (typeof trayHoverUnlockCleanup === "function") {
+      trayHoverUnlockCleanup();
+      trayHoverUnlockCleanup = null;
+    }
+    const prevActive = document.activeElement;
+    if (prevActive instanceof HTMLElement) {
+      try {
+        prevActive.blur();
+      } catch (_err) {
+        // no-op
+      }
+    }
     const menu = state.trayMenu || {};
     const modeLabel = String(menu.modeLabel || (menu.mode === "ai" ? "AI" : "词典"));
     const aiChecked = Boolean(menu.aiChecked);
@@ -908,7 +921,7 @@
     const screenshotEnabled = Boolean(menu.screenshotEnabled);
     root.innerHTML = `
       <div class="tray-shell">
-        <section class="tray-card" role="menu" aria-label="${appLabel} 托盘菜单">
+        <section class="tray-card" role="menu" aria-label="${appLabel} 托盘菜单" tabindex="-1">
           <header class="tray-header">
             <div class="tray-brand">
               ${iconUrl ? `<img class="tray-brand-icon" src="${iconUrl}" alt="${appLabel}" />` : ""}
@@ -941,12 +954,23 @@
           </div>
         </section>
       </div>`;
-    window.requestAnimationFrame(() => {
-      const first = document.querySelector(".tray-item");
-      if (first instanceof HTMLButtonElement) {
-        first.focus();
-      }
-    });
+    const card = document.querySelector(".tray-card");
+    if (card instanceof HTMLElement) {
+      card.classList.add("no-hover");
+      const onPointerMove = () => {
+        if (card.isConnected) {
+          card.classList.remove("no-hover");
+        }
+        if (typeof trayHoverUnlockCleanup === "function") {
+          trayHoverUnlockCleanup();
+          trayHoverUnlockCleanup = null;
+        }
+      };
+      window.addEventListener("pointermove", onPointerMove, { passive: true });
+      trayHoverUnlockCleanup = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+      };
+    }
   }
 
   function renderScreenshot() {
@@ -1005,6 +1029,10 @@
   }
 
   function render() {
+    if (state.view !== "tray" && typeof trayHoverUnlockCleanup === "function") {
+      trayHoverUnlockCleanup();
+      trayHoverUnlockCleanup = null;
+    }
     document.body.className = `view-${state.view}`;
     document.documentElement.dataset.view = state.view;
     if (state.view === "bubble") {
@@ -2327,6 +2355,14 @@
         if (trayAction) {
           await apiCall("tray_action", trayAction);
         }
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) {
+          try {
+            active.blur();
+          } catch (_err) {
+            // no-op
+          }
+        }
         break;
       }
       case "test-ai":
@@ -2792,6 +2828,14 @@
   function handleKeydown(event) {
     if (state.view === "tray" && event.key === "Escape") {
       event.preventDefault();
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        try {
+          active.blur();
+        } catch (_err) {
+          // no-op
+        }
+      }
       void apiCall("close_window");
       return;
     }
@@ -2882,6 +2926,14 @@
   });
   window.addEventListener("blur", () => {
     if (state.view === "tray") {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        try {
+          active.blur();
+        } catch (_err) {
+          // no-op
+        }
+      }
       void apiCall("close_window");
     }
   });
