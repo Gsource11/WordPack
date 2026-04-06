@@ -3057,10 +3057,8 @@ class WordPackWebviewApp:
         return max(1, int(round(base * self._dpi_scale())))
 
     def _selection_drag_threshold_px(self) -> int:
-        # Keep user-config threshold as baseline, but relax a bit in runtime to
-        # avoid missed captures on short-yet-real text selections.
         base = int(self.config.interaction.selection_drag_min_px or 9)
-        return max(5, min(40, base - 2))
+        return max(6, min(40, base))
 
     def _selection_click_pair_distance_px(self) -> int:
         return max(4, int(self.config.interaction.selection_click_pair_max_distance_px or 14))
@@ -3166,9 +3164,11 @@ class WordPackWebviewApp:
         moved = int(candidate.moved_px or 0)
         payload = candidate.payload or {}
         click_count = self._selection_payload_int(payload, "click_count", 0)
-        if moved >= self._selection_drag_threshold_px():
+        drag_min = self._selection_drag_threshold_px()
+        if moved >= drag_min:
             return True
-        if click_count >= 2:
+        click_move_cap = max(self._selection_click_pair_distance_px() * 2, self._scale_px(16))
+        if click_count >= 2 and moved <= click_move_cap:
             return True
         return False
 
@@ -3266,12 +3266,10 @@ class WordPackWebviewApp:
             return True
 
         candidate.verified_has_text = False
-        if result.reason == "password-field":
-            return False
         if result.reason in {"uia-module-missing", "uia-module-import-failed", "uia-internal-error"}:
             candidate.verified_has_text = None
-            return True
-        return self._is_candidate_signal_strong(candidate)
+        # Be conservative: no confirmed text -> no floating icon.
+        return False
 
     def trigger_selection_translate(self) -> dict[str, Any]:
         self._selection_icon_hover_armed = False
@@ -4001,10 +3999,11 @@ class WordPackWebviewApp:
                         self._fb_last_lbtn_up_at = now
                         self._fb_last_lbtn_up_pos = (cursor_x, cursor_y)
 
-                        if (
-                            moved >= self._selection_drag_threshold_px()
-                            or self._fb_lbtn_click_count >= 2
-                        ):
+                        drag_min = self._selection_drag_threshold_px()
+                        click_move_cap = max(self._selection_click_pair_distance_px() * 2, self._scale_px(16))
+                        strong_drag = moved >= drag_min
+                        strong_double_click = self._fb_lbtn_click_count >= 2 and moved <= click_move_cap
+                        if strong_drag or strong_double_click:
                             down_x = int(down[0]) if down else int(cursor_x)
                             down_y = int(down[1]) if down else int(cursor_y)
                             self._emit_selection_candidate(

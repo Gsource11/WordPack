@@ -119,7 +119,8 @@ class MouseHookManager:
                 down = self._last_down_pos
                 moved = abs(x - down[0]) + abs(y - down[1]) if down else 0
                 hold_ms = int(max(0.0, (now - float(self._last_down_at or now))) * 1000.0)
-                should_emit = moved >= 1 or self._click_count >= 2
+                # Ignore tiny pointer jitter on normal click release.
+                should_emit = moved >= 4 or self._click_count >= 2
                 if should_emit:
                     down_x = int(down[0]) if down else int(x)
                     down_y = int(down[1]) if down else int(y)
