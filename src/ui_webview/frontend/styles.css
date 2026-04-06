@@ -363,6 +363,7 @@ body.view-main .app-badge {
   background: var(--panel-muted);
   border: 1px solid var(--stroke-soft);
   color: var(--text-1);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .icon-button .icon {
@@ -381,6 +382,27 @@ body.view-main .icon-button {
 body.view-main .icon-button .icon {
   width: 17px;
   height: 17px;
+}
+
+.icon-button:focus,
+.icon-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.panel-switch-toolbar .icon-button.is-active,
+.icon-button.is-active {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+}
+
+body.view-main .panel-switch-toolbar .icon-button.is-active,
+body.view-main .icon-button.is-active {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
 }
 
 .icon-button:hover,
@@ -2161,6 +2183,13 @@ body[data-theme="dark"].view-main .icon-button {
   background: #242a33;
   border-color: #ffffff1f;
   color: #c7d0db;
+}
+
+body[data-theme="dark"].view-main .icon-button.is-active,
+body[data-theme="dark"].view-main .panel-switch-toolbar .icon-button.is-active {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
 }
 
 body[data-theme="dark"].view-main .seg-track {

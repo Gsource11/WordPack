@@ -385,6 +385,21 @@
     );
   }
 
+  function clearMainCompactRecheckTimer() {
+    if (!mainCompactRecheckTimer) return;
+    window.clearTimeout(mainCompactRecheckTimer);
+    mainCompactRecheckTimer = 0;
+  }
+
+  function scheduleMainCompactRecheck(delayMs) {
+    const wait = Math.max(0, Number(delayMs || 0));
+    clearMainCompactRecheckTimer();
+    mainCompactRecheckTimer = window.setTimeout(() => {
+      mainCompactRecheckTimer = 0;
+      syncMainCompact();
+    }, wait);
+  }
+
   function ensureTooltipElement() {
     if (tooltipEl && document.body.contains(tooltipEl)) {
       return tooltipEl;
@@ -525,6 +540,15 @@
 
   function syncMainCompact() {
     if (state.view !== "main") return;
+    const now = Date.now();
+    if (now < forceMainExpandedUntil) {
+      // When a side-sheet just opened/closed we keep expanded briefly; ensure we
+      // re-evaluate once this guard expires, otherwise quick switches can stick
+      // in expanded height.
+      scheduleMainCompactRecheck((forceMainExpandedUntil - now) + 24);
+    } else {
+      clearMainCompactRecheckTimer();
+    }
     mainWindowCompactTarget = desiredMainCompact() ? "true" : "false";
     flushMainCompactRequest();
   }
@@ -537,7 +561,8 @@
 
   function stageOpenSideSheet(kind) {
     clearSideSheetOpenTimer();
-    forceMainExpandedUntil = Date.now() + 320;
+    const switchingBetweenSheets = Boolean(state.historyOpen || state.settingsOpen);
+    forceMainExpandedUntil = switchingBetweenSheets ? 0 : (Date.now() + SIDE_SHEET_EXPAND_GUARD_MS);
     state.historyOpen = kind === "history";
     state.settingsOpen = kind === "settings";
     mainWindowCompactTarget = "false";
@@ -549,6 +574,9 @@
   }
 
   async function openHistoryPanel() {
+    if (state.settingsOpen) {
+      scheduleSettingsSave(true);
+    }
     await stageOpenSideSheet("history");
     void loadHistory(true);
   }
@@ -568,11 +596,28 @@
     }
   }
 
+  function closeSideSheetsToMain(options = {}) {
+    const saveSettings = Boolean(options?.saveSettings);
+    if (saveSettings) {
+      scheduleSettingsSave(true);
+    }
+    clearSideSheetOpenTimer();
+    state.historyOpen = false;
+    state.settingsOpen = false;
+    forceMainExpandedUntil = 0;
+    clearMainCompactRecheckTimer();
+    mainWindowCompactTarget = desiredMainCompact() ? "true" : "false";
+    flushMainCompactRequest();
+    rerender();
+  }
+
   function showMainFromTray() {
     clearSideSheetOpenTimer();
     state.historyOpen = false;
     state.settingsOpen = false;
     state.zoomOpen = false;
+    forceMainExpandedUntil = 0;
+    clearMainCompactRecheckTimer();
     rerender();
     syncMainCompact();
     window.requestAnimationFrame(() => {
@@ -635,6 +680,8 @@
   let sideSheetOpenRaf = 0;
   let mainContentExpandTimer = 0;
   let forceMainExpandedUntil = 0;
+  let mainCompactRecheckTimer = 0;
+  const SIDE_SHEET_EXPAND_GUARD_MS = 120;
   const HISTORY_SEARCH_DEBOUNCE_MS = 500;
   const SETTINGS_SAVE_DEBOUNCE_MS = 260;
 
@@ -678,6 +725,17 @@
         void flushSettingsDraftSave();
       }
     }
+  }
+
+  function panelSwitchToolbar(activePanel = "main") {
+    const historyActive = activePanel === "history";
+    const settingsActive = activePanel === "settings";
+    return `
+      <div class="toolbar panel-switch-toolbar">
+        <button class="icon-button ${historyActive ? "is-active" : ""}" data-action="toggle-history-panel" aria-label="历史" aria-pressed="${historyActive ? "true" : "false"}">${icons.history}</button>
+        <button class="icon-button ${settingsActive ? "is-active" : ""}" data-action="toggle-settings-panel" aria-label="设置" aria-pressed="${settingsActive ? "true" : "false"}">${icons.settings}</button>
+        <button class="icon-button" data-action="close-app" aria-label="关闭">${icons.close}</button>
+      </div>`;
   }
 
   async function waitForSettingsSaveIdle(timeoutMs = 2200) {
@@ -1239,11 +1297,7 @@
         <section class="window-card ${showResultCard ? "" : "no-result"}">
           <header class="topbar" data-drag-handle="main-topbar">
             <div class="drag-row"><span class="app-badge">${brandIcon("app-badge-icon", state.branding?.appIconUrl)}<span>${escapeHtml(state.appTitle || "WordPack")}</span></span></div>
-            <div class="toolbar">
-              <button class="icon-button" data-action="open-history" aria-label="历史">${icons.history}</button>
-              <button class="icon-button" data-action="open-settings" aria-label="设置">${icons.settings}</button>
-              <button class="icon-button" data-action="close-app" aria-label="关闭">${icons.close}</button>
-            </div>
+            ${panelSwitchToolbar("main")}
           </header>
           <div class="segmented">
             <div class="seg-track">
@@ -1293,7 +1347,7 @@
           <div class="panel-drag-hitbox" data-drag-handle="history-top"></div>
           <div class="sheet-header" data-drag-handle="history-header">
             <div class="sheet-title">历史记录</div>
-            <button class="icon-button" data-action="close-history">${icons.close}</button>
+            ${panelSwitchToolbar("history")}
           </div>
           <div class="history-toolbar">
             <div class="history-tabs">
@@ -1381,7 +1435,7 @@
           <div class="panel-drag-hitbox" data-drag-handle="settings-top"></div>
           <div class="sheet-header" data-drag-handle="settings-header">
             <div class="sheet-title">设置</div>
-            <button class="icon-button" data-action="close-settings">${icons.close}</button>
+            ${panelSwitchToolbar("settings")}
           </div>
           <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
             ${notice}
@@ -1863,7 +1917,18 @@
     }
 
     const action = actionTarget.dataset.action;
-    if (["open-history", "open-settings", "close-settings", "close-history", "open-zoom", "close-zoom"].includes(action)) {
+    if (
+      [
+        "open-history",
+        "open-settings",
+        "close-settings",
+        "close-history",
+        "toggle-history-panel",
+        "toggle-settings-panel",
+        "open-zoom",
+        "close-zoom",
+      ].includes(action)
+    ) {
       event.preventDefault();
     }
 
@@ -1871,19 +1936,28 @@
       case "open-history":
         await openHistoryPanel();
         break;
+      case "toggle-history-panel":
+        if (state.historyOpen) {
+          closeSideSheetsToMain();
+          break;
+        }
+        await openHistoryPanel();
+        break;
       case "close-history":
-        clearSideSheetOpenTimer();
-        state.historyOpen = false;
-        rerender();
+        closeSideSheetsToMain();
         break;
       case "open-settings":
         await openSettingsPanel();
         break;
+      case "toggle-settings-panel":
+        if (state.settingsOpen) {
+          closeSideSheetsToMain({ saveSettings: true });
+          break;
+        }
+        await openSettingsPanel();
+        break;
       case "close-settings":
-        scheduleSettingsSave(true);
-        clearSideSheetOpenTimer();
-        state.settingsOpen = false;
-        rerender();
+        closeSideSheetsToMain({ saveSettings: true });
         break;
       case "open-zoom":
         scrollFollowState["zoom-shell"] = true;
