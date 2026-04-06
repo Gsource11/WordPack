@@ -83,6 +83,11 @@ html[data-view="icon"] {
   background-image: none !important;
 }
 
+html[data-view="tray"] {
+  background: transparent !important;
+  background-image: none !important;
+}
+
 html[data-view="screenshot"] {
   background: transparent !important;
   background-image: none !important;
@@ -101,6 +106,12 @@ body.view-main {
 body.view-icon {
   overflow: hidden;
   background: transparent !important;
+  background-image: none !important;
+}
+
+body.view-tray {
+  overflow: hidden;
+  background: #f8fafd !important;
   background-image: none !important;
 }
 
@@ -124,6 +135,19 @@ body.view-bubble {
 
 body.view-icon #app {
   background: transparent !important;
+}
+
+body.view-tray #app {
+  background: #f8fafd !important;
+}
+
+body[data-theme="dark"].view-tray {
+  background: #1b2028 !important;
+  background-image: none !important;
+}
+
+body[data-theme="dark"].view-tray #app {
+  background: #1b2028 !important;
 }
 
 body.view-screenshot #app {
@@ -2433,6 +2457,188 @@ body[data-theme="dark"].view-bubble .bubble-arrow {
   object-fit: contain;
   filter: none;
   image-rendering: -webkit-optimize-contrast;
+}
+
+.tray-shell {
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  background: #f8fafd !important;
+  box-sizing: border-box;
+}
+
+.tray-card {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 10px;
+  border-radius: 0;
+  border: none;
+  background: #f8fafd;
+  box-shadow: inset 0 0 0 1px rgba(11, 19, 32, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.tray-header {
+  padding: 4px 6px 6px;
+}
+
+.tray-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tray-brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.tray-brand-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tray-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #16202c;
+}
+
+.tray-subtitle {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #637285;
+}
+
+.tray-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tray-sep {
+  height: 1px;
+  background: rgba(11, 19, 32, 0.08);
+  margin: 2px 2px;
+}
+
+.tray-item {
+  width: 100%;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  color: #16202c;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.tray-item .icon {
+  width: 16px;
+  height: 16px;
+  color: #556577;
+  stroke-width: 1.9;
+}
+
+.tray-item:hover,
+.tray-item:focus-visible {
+  background: rgba(11, 19, 32, 0.06);
+  border-color: rgba(11, 19, 32, 0.08);
+  outline: none;
+}
+
+.tray-item.danger {
+  color: #b13b2c;
+}
+
+.tray-item.danger .icon {
+  color: #b13b2c;
+}
+
+.tray-item-toggle span:nth-child(2) {
+  flex: 1 1 auto;
+}
+
+.tray-toggle-pill {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5e6a78;
+  background: rgba(11, 19, 32, 0.08);
+}
+
+.tray-toggle-pill.on {
+  background: rgba(255, 154, 61, 0.2);
+  color: #7f4606;
+}
+
+body[data-theme="dark"].view-tray .tray-card {
+  border: none;
+  background: #1b2028;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+body[data-theme="dark"].view-tray .tray-title {
+  color: #f3f6fa;
+}
+
+body[data-theme="dark"].view-tray .tray-subtitle {
+  color: #9dafc4;
+}
+
+body[data-theme="dark"].view-tray .tray-sep {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+body[data-theme="dark"].view-tray .tray-item {
+  color: #e6edf7;
+}
+
+body[data-theme="dark"].view-tray .tray-item .icon {
+  color: #a8b7ca;
+}
+
+body[data-theme="dark"].view-tray .tray-item:hover,
+body[data-theme="dark"].view-tray .tray-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+body[data-theme="dark"].view-tray .tray-toggle-pill {
+  background: rgba(255, 255, 255, 0.12);
+  color: #c7d0db;
+}
+
+body[data-theme="dark"].view-tray .tray-toggle-pill.on {
+  background: rgba(255, 154, 61, 0.3);
+  color: #ffd7a6;
+}
+
+body[data-theme="dark"].view-tray .tray-item.danger,
+body[data-theme="dark"].view-tray .tray-item.danger .icon {
+  color: #ff9f93;
 }
 
 .screenshot-shell {

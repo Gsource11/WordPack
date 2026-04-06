@@ -4,7 +4,7 @@ import ctypes
 import threading
 from ctypes import Structure, WINFUNCTYPE, byref, sizeof, windll
 from ctypes import wintypes
-from typing import Callable
+from typing import Any, Callable
 
 
 user32 = windll.user32
@@ -136,7 +136,7 @@ class TrayIconManager:
         *,
         title: str,
         icon_path: str,
-        on_action: Callable[[str], None],
+        on_action: Callable[[str, dict[str, Any] | None], None],
         state_getter: Callable[[], dict[str, bool]],
         logger,
     ) -> None:
@@ -283,7 +283,9 @@ class TrayIconManager:
                     WM_RBUTTONDOWN,
                     WM_CONTEXTMENU,
                 ):
-                    self._show_context_menu(hwnd)
+                    pt = POINT()
+                    user32.GetCursorPos(byref(pt))
+                    self._dispatch_action("show_tray_menu", {"x": int(pt.x), "y": int(pt.y)})
                     return 0
                 if raw_event == WM_LBUTTONDBLCLK or event_code == WM_LBUTTONDBLCLK:
                     self._dispatch_action("show_main")
@@ -368,8 +370,8 @@ class TrayIconManager:
             return
         self._dispatch_action(action)
 
-    def _dispatch_action(self, action: str) -> None:
+    def _dispatch_action(self, action: str, payload: dict[str, Any] | None = None) -> None:
         try:
-            self._on_action(action)
+            self._on_action(action, payload)
         except Exception:
             self._logger.exception("Tray action failed: %s", action)

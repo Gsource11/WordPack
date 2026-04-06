@@ -75,6 +75,9 @@ class WindowApi:
     def close_window(self) -> dict[str, Any]:
         return self._controller.close_window(self.kind)
 
+    def tray_action(self, action: str) -> dict[str, Any]:
+        return self._controller.tray_action(action)
+
     def toggle_bubble_pin(self) -> dict[str, Any]:
         return self._controller.toggle_bubble_pin()
 

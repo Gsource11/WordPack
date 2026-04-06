@@ -50,6 +50,8 @@ class WordPackWebviewApp:
     MAIN_WINDOW_BG = "#c4c6ca"
     BUBBLE_WINDOW_BG = "#c4c6ca"
     DARK_WINDOW_BG = "#1b2028"
+    TRAY_WINDOW_BG = "#f8fafd"
+    TRAY_WINDOW_DARK_BG = "#1b2028"
     MAIN_WIDTH = 468
     MAIN_HEIGHT = 680
     MAIN_MIN_HEIGHT = 360
@@ -59,6 +61,8 @@ class WordPackWebviewApp:
     BUBBLE_HEIGHT = 272
     ICON_WIDTH = 34
     ICON_HEIGHT = 34
+    TRAY_MENU_WIDTH = 286
+    TRAY_MENU_HEIGHT = 338
     AI_PROBE_INTERVAL_SEC = 3600
     AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
     WEBVIEW2_RUNTIME_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -108,6 +112,7 @@ class WordPackWebviewApp:
         self.main_window = None
         self.bubble_window = None
         self.icon_window = None
+        self.tray_window = None
         self.window_apis: dict[str, WindowApi] = {}
         self._native_icon_overlay = NativeIconOverlay(
             icon_path=icon_path("app-icon.png"),
@@ -200,6 +205,10 @@ class WordPackWebviewApp:
         self._hide_main_after_zoom_close = False
         self._main_compact = True
         self._webview2_hint_shown = False
+        self._webview_started = False
+        self._tray_window_ready = False
+        self._tray_window_shape_applied = False
+        self._pending_tray_anchor: dict[str, int] | None = None
 
     def _resolve_data_dir(self, legacy_candidates: list[Path]) -> Path:
         def first_legacy_dir() -> Path:
@@ -487,6 +496,8 @@ class WordPackWebviewApp:
         theme = self._resolved_theme_mode()
         if kind in {"main", "bubble"}:
             return self.DARK_WINDOW_BG if theme == "dark" else self.MAIN_WINDOW_BG
+        if kind == "tray":
+            return self.TRAY_WINDOW_DARK_BG if theme == "dark" else self.TRAY_WINDOW_BG
         if kind == "icon":
             return "#000000"
         return "#eef1ec"
@@ -580,8 +591,10 @@ class WordPackWebviewApp:
     def _apply_theme_backgrounds(self) -> None:
         main_bg = self._window_background_color("main")
         bubble_bg = self._window_background_color("bubble")
+        tray_bg = self._window_background_color("tray")
         self._apply_window_background(self.main_window, main_bg)
         self._apply_window_background(self.bubble_window, bubble_bg)
+        self._apply_window_background(self.tray_window, tray_bg)
 
     def _centered_position(self, width: int, height: int) -> tuple[int, int]:
         bounds = get_virtual_screen_bounds()
@@ -824,8 +837,77 @@ class WordPackWebviewApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _apply_tray_window_shape_fix(self, window) -> None:
+        def worker() -> None:
+            try:
+                if not window.events.shown.wait(2.0):
+                    return
+                native = getattr(window, "native", None)
+                if native is None:
+                    return
+                handle = getattr(native, "Handle", None)
+                if handle is None:
+                    return
+
+                hwnd = self._native_handle_to_int(handle)
+                if not hwnd:
+                    return
+
+                # Prefer DWM compositor rounded corners (anti-aliased) on
+                # supported Windows versions. SetWindowRgn is a hard clip and
+                # can produce visible jagged edges on curved corners.
+                try:
+                    DWMWA_WINDOW_CORNER_PREFERENCE = 33
+                    DWMWCP_ROUND = 2
+                    preference = ctypes.c_int(DWMWCP_ROUND)
+                    dwm = ctypes.windll.dwmapi
+                    hr = int(
+                        dwm.DwmSetWindowAttribute(
+                            ctypes.c_void_p(hwnd),
+                            ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
+                            ctypes.byref(preference),
+                            ctypes.sizeof(preference),
+                        )
+                    )
+                    if hr == 0:
+                        return
+                except Exception:
+                    pass
+
+                rect = wintypes.RECT()
+                if not ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                    return
+
+                client_width = max(0, int(rect.right - rect.left))
+                client_height = max(0, int(rect.bottom - rect.top))
+                if client_width <= 0 or client_height <= 0:
+                    return
+
+                radius = max(16, min(28, int(min(client_width, client_height) // 6)))
+                region = ctypes.windll.gdi32.CreateRoundRectRgn(
+                    0,
+                    0,
+                    client_width + 1,
+                    client_height + 1,
+                    radius,
+                    radius,
+                )
+                if not region:
+                    return
+                if not ctypes.windll.user32.SetWindowRgn(hwnd, region, True):
+                    ctypes.windll.gdi32.DeleteObject(region)
+            except Exception:
+                self.logger.exception("Failed to apply tray window shape fix")
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _on_webview_started(self) -> None:
+        self._webview_started = True
         self.logger.info("Starting background input services")
+        try:
+            self._ensure_tray_window()
+        except Exception:
+            self.logger.exception("Failed to prewarm tray window")
         try:
             if self.main_window is not None:
                 current = self._current_main_geometry()
@@ -899,6 +981,7 @@ class WordPackWebviewApp:
         payload = self._ai_availability_payload()
         self.bridge.send("main", "ai-availability", payload)
         self.bridge.send("bubble", "ai-availability", payload)
+        self.bridge.send("tray", "ai-availability", payload)
 
     def _probe_ai_availability_async(self) -> None:
         with self.lock:
@@ -946,6 +1029,11 @@ class WordPackWebviewApp:
             elif kind == "icon":
                 self.icon_window = None
                 self._native_icon_overlay.hide()
+            elif kind == "tray":
+                self.tray_window = None
+                self._tray_window_ready = False
+                self._tray_window_shape_applied = False
+                self._pending_tray_anchor = None
 
         if kind == "main" and not self._shutting_down:
             self.shutdown()
@@ -984,7 +1072,7 @@ class WordPackWebviewApp:
         if self._ai_probe_thread is not None and self._ai_probe_thread.is_alive():
             self._ai_probe_thread.join(timeout=0.8)
 
-        for kind in ("bubble", "icon", "main"):
+        for kind in ("tray", "bubble", "icon", "main"):
             window = getattr(self, f"{kind}_window", None)
             if window is None:
                 continue
@@ -1023,10 +1111,26 @@ class WordPackWebviewApp:
                 "mode": self.config.translation_mode,
                 "triggerMode": self.config.interaction.selection_icon_trigger,
             }
+        if kind == "tray":
+            return {
+                "view": "tray",
+                "appTitle": APP_TITLE,
+                "branding": self._branding_payload(),
+                "themeMode": self._resolved_theme_mode(),
+                "trayMenu": self._tray_menu_payload(),
+                "aiAvailability": self._ai_availability_payload(),
+            }
         return {"view": kind}
 
     def mark_window_ready(self, kind: str) -> None:
         self.bridge.mark_ready(kind)
+        if kind == "tray":
+            self._tray_window_ready = True
+            pending = dict(self._pending_tray_anchor or {})
+            self._pending_tray_anchor = None
+            if pending:
+                self._show_tray_menu(pending)
+            return
         if kind != "main" or self.main_window is None:
             return
         with self.lock:
@@ -1110,6 +1214,8 @@ class WordPackWebviewApp:
         self._last_window_interaction_at = time.time()
         if self._native_icon_overlay.is_visible():
             self.close_window("icon")
+        if self.tray_window is not None:
+            self.close_window("tray")
 
     def set_main_compact(self, compact: bool, height: int | None = None) -> dict[str, Any]:
         compact = bool(compact)
@@ -1271,6 +1377,7 @@ class WordPackWebviewApp:
         self.bridge.send("main", "config-updated", payload)
         self.bridge.send("bubble", "theme-updated", {"themeMode": self._resolved_theme_mode(), "mode": value})
         self._emit_bubble_updated()
+        self._emit_tray_menu_updated()
         return payload
 
     def set_theme(self, theme: str) -> dict[str, Any]:
@@ -1288,7 +1395,101 @@ class WordPackWebviewApp:
         resolved = self._resolved_theme_mode(value)
         self.bridge.send("bubble", "theme-updated", {"themeMode": resolved, "bubble": self._bubble_state.to_payload()})
         self.bridge.send("icon", "theme-updated", {"themeMode": resolved, "mode": self.config.translation_mode})
+        self._emit_tray_menu_updated()
         return payload
+
+    def _tray_menu_payload(self) -> dict[str, Any]:
+        mode = self._normalize_translation_mode(self.config.translation_mode)
+        return {
+            "startupEnabled": bool(self.config.interaction.startup_launch_enabled),
+            "selectionEnabled": bool(self.config.interaction.selection_enabled),
+            "screenshotEnabled": bool(self.config.interaction.screenshot_enabled),
+            "mode": mode,
+            "modeLabel": "AI" if mode == "ai" else "词典",
+            "aiAvailable": bool(self._ai_available),
+            "aiChecked": bool(self._ai_available_checked),
+        }
+
+    def _emit_tray_menu_updated(self) -> None:
+        self.bridge.send(
+            "tray",
+            "tray-menu-updated",
+            {
+                "themeMode": self._resolved_theme_mode(),
+                "trayMenu": self._tray_menu_payload(),
+            },
+        )
+
+    def _tray_menu_position(self, anchor_x: int, anchor_y: int) -> tuple[int, int]:
+        bounds = get_virtual_screen_bounds()
+        width = int(self.TRAY_MENU_WIDTH)
+        height = int(self.TRAY_MENU_HEIGHT)
+        margin = 8
+        top_gap = 10
+        x = int(anchor_x) - width + 16
+        y = int(anchor_y) - height - top_gap
+        if y < (bounds.top + margin):
+            y = int(anchor_y) + top_gap
+        max_x = max(bounds.left + margin, bounds.right - width - margin)
+        max_y = max(bounds.top + margin, bounds.bottom - height - margin)
+        x = max(bounds.left + margin, min(x, max_x))
+        y = max(bounds.top + margin, min(y, max_y))
+        return int(x), int(y)
+
+    def _ensure_tray_window(self) -> bool:
+        if self.tray_window is not None:
+            return True
+        bounds = get_virtual_screen_bounds()
+        width = int(self.TRAY_MENU_WIDTH)
+        height = int(self.TRAY_MENU_HEIGHT)
+        offscreen_x = int(bounds.left) - width - 120
+        offscreen_y = int(bounds.top) - height - 120
+        try:
+            self.tray_window = self._create_window(
+                kind="tray",
+                title=f"{APP_TITLE} Tray",
+                width=width,
+                height=height,
+                min_size=(width, height),
+                x=offscreen_x,
+                y=offscreen_y,
+                frameless=True,
+                shadow=False,
+                resizable=False,
+                on_top=True,
+                focus=False,
+                transparent=True,
+                hidden=True,
+            )
+            self._tray_window_ready = False
+            self._tray_window_shape_applied = False
+            return True
+        except Exception:
+            self.logger.exception("Failed to create tray window")
+            self.tray_window = None
+            return False
+
+    def _show_tray_menu(self, payload: dict[str, Any] | None = None) -> None:
+        if not self._webview_started:
+            return
+        if not self._ensure_tray_window():
+            return
+        cursor_x, cursor_y = get_cursor_position()
+        anchor_x = int((payload or {}).get("x", cursor_x))
+        anchor_y = int((payload or {}).get("y", cursor_y))
+        if not self._tray_window_ready:
+            self._pending_tray_anchor = {"x": int(anchor_x), "y": int(anchor_y)}
+            return
+        x, y = self._tray_menu_position(anchor_x, anchor_y)
+        try:
+            self.tray_window.move(x, y)
+            self.tray_window.show()
+            if not self._tray_window_shape_applied:
+                self._apply_tray_window_shape_fix(self.tray_window)
+                self._tray_window_shape_applied = True
+        except Exception:
+            self.logger.exception("Failed to show tray menu window")
+        self._emit_tray_menu_updated()
 
     def _show_main_window(self) -> None:
         if self.main_window is None:
@@ -1315,6 +1516,7 @@ class WordPackWebviewApp:
         self.set_status("已启用划词" if enabled else "已关闭划词")
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
+        self._emit_tray_menu_updated()
         return {"ok": True, "enabled": enabled}
 
     def _toggle_startup_enabled_from_tray(self) -> dict[str, Any]:
@@ -1326,6 +1528,7 @@ class WordPackWebviewApp:
             self.set_status("开机自启动设置失败，请检查系统权限后重试")
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
+        self._emit_tray_menu_updated()
         return {"ok": bool(success), "enabled": bool(actual)}
 
     def _toggle_screenshot_enabled_from_tray(self) -> dict[str, Any]:
@@ -1341,10 +1544,10 @@ class WordPackWebviewApp:
         self.set_status("已启用截图翻译" if enabled else "已关闭截图翻译")
         payload = self._config_event_payload()
         self.bridge.send("main", "config-updated", payload)
+        self._emit_tray_menu_updated()
         return {"ok": True, "enabled": enabled}
 
-    def _on_tray_action(self, action: str) -> None:
-        key = str(action or "").strip().lower()
+    def _dispatch_tray_action(self, key: str) -> None:
         if key == "exit":
             self.shutdown()
             return
@@ -1366,6 +1569,21 @@ class WordPackWebviewApp:
         if key == "toggle_screenshot":
             self._toggle_screenshot_enabled_from_tray()
             return
+
+    def _on_tray_action(self, action: str, payload: dict[str, Any] | None = None) -> None:
+        key = str(action or "").strip().lower()
+        if key == "show_tray_menu":
+            self._show_tray_menu(payload)
+            return
+        self._dispatch_tray_action(key)
+
+    def tray_action(self, action: str) -> dict[str, Any]:
+        key = str(action or "").strip().lower()
+        if not key:
+            return {"ok": False}
+        self.close_window("tray")
+        self._dispatch_tray_action(key)
+        return {"ok": True, "action": key}
 
     def cycle_direction(self) -> dict[str, Any]:
         options = ["auto", "en->zh", "zh->en"]
@@ -2189,6 +2407,7 @@ class WordPackWebviewApp:
         resolved = self._resolved_theme_mode()
         self.bridge.send("bubble", "theme-updated", {"themeMode": resolved, "bubble": self._bubble_state.to_payload()})
         self.bridge.send("icon", "theme-updated", {"themeMode": resolved, "mode": self.config.translation_mode})
+        self._emit_tray_menu_updated()
         return response
 
     def test_ai_connection(self) -> None:
@@ -3390,6 +3609,15 @@ class WordPackWebviewApp:
                 self._bubble_state.pinned = False
                 window = self.bubble_window
                 self.bubble_window = None
+        elif kind == "tray":
+            if self.tray_window is not None:
+                try:
+                    self.tray_window.hide()
+                    return {"ok": True, "hidden": True}
+                except Exception:
+                    self.logger.exception("Failed to hide tray window")
+                    return {"ok": False, "hidden": False}
+            return {"ok": True, "hidden": True}
         elif kind == "icon":
             self._cancel_selection_icon_hide_timer()
             self._native_icon_overlay.hide()

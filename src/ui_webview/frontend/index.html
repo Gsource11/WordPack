@@ -26,6 +26,16 @@
         background: transparent !important;
         background-image: none !important;
       }
+      html.preload-tray-light,
+      html.preload-tray-light body {
+        background: #f8fafd !important;
+        background-image: none !important;
+      }
+      html.preload-tray-dark,
+      html.preload-tray-dark body {
+        background: #1b2028 !important;
+        background-image: none !important;
+      }
       html.preload-screenshot,
       html.preload-screenshot body {
         background: transparent !important;
@@ -44,6 +54,9 @@
         }
         if (view === "icon" || view === "bubble") {
           document.documentElement.classList.add("preload-transparent");
+        }
+        if (view === "tray") {
+          document.documentElement.classList.add(theme === "dark" ? "preload-tray-dark" : "preload-tray-light");
         }
         if (view === "screenshot") {
           document.documentElement.classList.add("preload-screenshot");

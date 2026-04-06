@@ -42,6 +42,7 @@
     toast: null,
     shortcuts: [],
     bubble: null,
+    trayMenu: null,
     bubbleCandidatePaneOpen: false,
     triggerMode: "click",
     screenshot: null,
@@ -87,6 +88,7 @@
     history: icon("<path d='M3 12a9 9 0 1 0 3-6.7'/><path d='M3 4v5h5'/><path d='M12 7v5l3 2'/>"),
     search: icon("<circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/>"),
     settings: icon("<circle cx='12' cy='12' r='3.2'/><path d='M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 1 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 1 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a2 2 0 1 1 4 0v.1a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6H20a2 2 0 1 1 0 4h-.1a1 1 0 0 0-.9.6Z'/>"),
+    mainPanel: icon("<rect x='3.5' y='4' width='17' height='16' rx='2.6'/><path d='M3.5 9h17'/><circle cx='6.8' cy='6.6' r='.85' fill='currentColor' stroke='none'/><circle cx='9.6' cy='6.6' r='.85' fill='currentColor' stroke='none'/><circle cx='12.4' cy='6.6' r='.85' fill='currentColor' stroke='none'/><path d='M7 13h4M7 16h7'/>"),
     close: icon("<path d='M6 6l12 12M18 6l-12 12'/>"),
     book: icon("<path d='M4.5 6a1.5 1.5 0 0 1 1.5-1.5H8c1.8 0 3.2.45 4 1.35.8-.9 2.2-1.35 4-1.35h2a1.5 1.5 0 0 1 1.5 1.5v11.4a.6.6 0 0 1-.6.6H16c-1.6 0-2.85.3-3.75.92a.45.45 0 0 1-.5 0C10.85 18.3 9.6 18 8 18H5.1a.6.6 0 0 1-.6-.6Z'/><path d='M12 5.9V18.9'/><path d='M7.4 8.1h1.3M15.3 8.1h1.3'/>"),
     robot: icon("<path d='M12 4v3'/><rect x='4' y='7' width='16' height='12' rx='4'/><path d='M9 12h.01M15 12h.01M8 16h8'/>"),
@@ -102,6 +104,9 @@
     moon: icon("<path d='M21 12.7A9 9 0 1 1 11.3 3a7 7 0 0 0 9.7 9.7Z'/>"),
     sun: icon("<circle cx='12' cy='12' r='4'/><path d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/>"),
     link: icon("<path d='M10 14 14 10'/><path d='M8.5 6.5a3 3 0 0 1 4.2 0l.8.8a3 3 0 0 1 0 4.2l-.6.6'/><path d='M11.1 12.9l-.6.6a3 3 0 0 1-4.2 0l-.8-.8a3 3 0 0 1 0-4.2l.6-.6'/>"),
+    startup: icon("<path d='M12 3v5'/><path d='M7.5 5.8A8 8 0 1 0 16.5 5.8'/>"),
+    selection: icon("<path d='M4 6h7M4 12h7M4 18h7'/><path d='M14 5v14'/><path d='M11 8l3-3 3 3'/><path d='M11 16l3 3 3-3'/>"),
+    screenshot: icon("<path d='M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4'/><rect x='8' y='8' width='8' height='8' rx='1.5'/>"),
     check: icon("<path d='M20 6 9 17l-5-5'/>"),
     error: icon("<circle cx='12' cy='12' r='9'/><path d='M9 9l6 6M15 9l-6 6'/>"),
   };
@@ -814,6 +819,7 @@
     }
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
+    if (payload.trayMenu) state.trayMenu = payload.trayMenu;
     if (payload.triggerMode) state.triggerMode = payload.triggerMode;
     if (payload.screenshot) state.screenshot = payload.screenshot;
     state.ui.theme_mode = state.themeMode;
@@ -889,6 +895,60 @@
     }
   }
 
+  function renderTray() {
+    const menu = state.trayMenu || {};
+    const modeLabel = String(menu.modeLabel || (menu.mode === "ai" ? "AI" : "词典"));
+    const aiChecked = Boolean(menu.aiChecked);
+    const aiAvailable = Boolean(menu.aiAvailable);
+    const aiText = aiChecked ? (aiAvailable ? "AI 可用" : "AI 未就绪") : "AI 检测中";
+    const iconUrl = state.branding?.bubbleIconUrl || state.branding?.appIconUrl || "";
+    const appLabel = escapeHtml(state.appTitle || "WordPack");
+    const startupEnabled = Boolean(menu.startupEnabled);
+    const selectionEnabled = Boolean(menu.selectionEnabled);
+    const screenshotEnabled = Boolean(menu.screenshotEnabled);
+    root.innerHTML = `
+      <div class="tray-shell">
+        <section class="tray-card" role="menu" aria-label="${appLabel} 托盘菜单">
+          <header class="tray-header">
+            <div class="tray-brand">
+              ${iconUrl ? `<img class="tray-brand-icon" src="${iconUrl}" alt="${appLabel}" />` : ""}
+              <div class="tray-brand-text">
+                <div class="tray-title">${appLabel}</div>
+                <div class="tray-subtitle">${escapeHtml(modeLabel)} · ${escapeHtml(aiText)}</div>
+              </div>
+            </div>
+          </header>
+          <div class="tray-group">
+            <button class="tray-item" data-action="tray-command" data-tray-action="show_main" role="menuitem">${icons.mainPanel}<span>主界面</span></button>
+            <button class="tray-item" data-action="tray-command" data-tray-action="open_history" role="menuitem">${icons.history}<span>历史</span></button>
+            <button class="tray-item" data-action="tray-command" data-tray-action="open_settings" role="menuitem">${icons.settings}<span>设置</span></button>
+          </div>
+          <div class="tray-sep"></div>
+          <div class="tray-group">
+            <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_startup" role="menuitemcheckbox" aria-checked="${startupEnabled ? "true" : "false"}">
+              ${icons.startup}<span>开机自启动</span><span class="tray-toggle-pill ${startupEnabled ? "on" : ""}">${startupEnabled ? "开" : "关"}</span>
+            </button>
+            <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_selection" role="menuitemcheckbox" aria-checked="${selectionEnabled ? "true" : "false"}">
+              ${icons.selection}<span>划词翻译</span><span class="tray-toggle-pill ${selectionEnabled ? "on" : ""}">${selectionEnabled ? "开" : "关"}</span>
+            </button>
+            <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_screenshot" role="menuitemcheckbox" aria-checked="${screenshotEnabled ? "true" : "false"}">
+              ${icons.screenshot}<span>截图翻译</span><span class="tray-toggle-pill ${screenshotEnabled ? "on" : ""}">${screenshotEnabled ? "开" : "关"}</span>
+            </button>
+          </div>
+          <div class="tray-sep"></div>
+          <div class="tray-group">
+            <button class="tray-item danger" data-action="tray-command" data-tray-action="exit" role="menuitem">${icons.close}<span>退出</span></button>
+          </div>
+        </section>
+      </div>`;
+    window.requestAnimationFrame(() => {
+      const first = document.querySelector(".tray-item");
+      if (first instanceof HTMLButtonElement) {
+        first.focus();
+      }
+    });
+  }
+
   function renderScreenshot() {
     if (typeof state.screenshotInteractionCleanup === "function") {
       state.screenshotInteractionCleanup();
@@ -953,6 +1013,10 @@
     }
     if (state.view === "icon") {
       renderIcon();
+      return;
+    }
+    if (state.view === "tray") {
+      renderTray();
       return;
     }
     if (state.view === "screenshot") {
@@ -2258,6 +2322,13 @@
         }
         await apiCall("close_window");
         break;
+      case "tray-command": {
+        const trayAction = String(actionTarget.dataset.trayAction || "").trim();
+        if (trayAction) {
+          await apiCall("tray_action", trayAction);
+        }
+        break;
+      }
       case "test-ai":
         state.testingAi = true;
         state.aiTestState = "idle";
@@ -2565,6 +2636,15 @@
         state.aiAvailabilityCheckedAt = Number(payload.checkedAt || state.aiAvailabilityCheckedAt || 0);
         if (state.view === "main" && patchMainDynamic()) return;
         if (state.view === "bubble" && patchBubbleDynamic()) return;
+        if (state.view === "tray") break;
+        break;
+      case "tray-menu-updated":
+        if (payload.trayMenu) {
+          state.trayMenu = payload.trayMenu;
+        }
+        if (payload.themeMode) {
+          setTheme(payload.themeMode);
+        }
         break;
       case "dictionary-models-updated":
         if (payload.config) state.config = payload.config;
@@ -2710,6 +2790,11 @@
   }
 
   function handleKeydown(event) {
+    if (state.view === "tray" && event.key === "Escape") {
+      event.preventDefault();
+      void apiCall("close_window");
+      return;
+    }
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
 
@@ -2793,6 +2878,11 @@
   document.addEventListener("mousedown", () => {
     if (state.view === "main" || state.view === "bubble") {
       void apiCall("notify_window_interaction");
+    }
+  });
+  window.addEventListener("blur", () => {
+    if (state.view === "tray") {
+      void apiCall("close_window");
     }
   });
 
