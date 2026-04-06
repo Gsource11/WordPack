@@ -569,7 +569,8 @@ body.view-main .window-card:not(.no-result) > .input-card {
 }
 
 body.view-main .window-card.no-result > .input-card {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .card-head {
@@ -685,13 +686,13 @@ body.view-main .input-shell {
 }
 
 body.view-main .window-card.no-result .input-shell {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
 }
 
 body.view-main .window-card.no-result .source-textarea {
-  height: 112px;
-  min-height: 112px;
-  max-height: 112px;
+  height: 100%;
+  min-height: 100%;
+  max-height: none;
 }
 
 body.view-main .window-card:not(.no-result) .input-shell {
