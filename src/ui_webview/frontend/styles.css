@@ -2528,9 +2528,27 @@ body[data-theme="dark"].view-bubble .bubble-arrow {
 }
 
 .tray-sep {
+  position: relative;
+  height: 6px;
+  margin: 0;
+  background: transparent;
+}
+
+.tray-sep::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
   height: 1px;
-  background: rgba(11, 19, 32, 0.08);
-  margin: 2px 2px;
+  transform: translateY(-0.5px);
+  background: linear-gradient(
+    90deg,
+    rgba(11, 19, 32, 0) 0%,
+    rgba(11, 19, 32, 0.16) 18%,
+    rgba(11, 19, 32, 0.16) 82%,
+    rgba(11, 19, 32, 0) 100%
+  );
 }
 
 .tray-item {
@@ -2616,7 +2634,17 @@ body[data-theme="dark"].view-tray .tray-subtitle {
 }
 
 body[data-theme="dark"].view-tray .tray-sep {
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
+}
+
+body[data-theme="dark"].view-tray .tray-sep::before {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.2) 18%,
+    rgba(255, 255, 255, 0.2) 82%,
+    rgba(255, 255, 255, 0) 100%
+  );
 }
 
 body[data-theme="dark"].view-tray .tray-item {
