@@ -32,6 +32,12 @@ class InteractionConfig:
 
 
 @dataclass
+class OCRConfig:
+    windows_lang: str = "auto"
+    timeout_sec: int = 6
+
+
+@dataclass
 class HistoryConfig:
     retention_days: int = 30  # 7 | 30 | 90
 
@@ -42,6 +48,7 @@ class AppConfig:
     theme_mode: str = "system"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     dictionary: DictionaryConfig = field(default_factory=DictionaryConfig)
+    ocr: OCRConfig = field(default_factory=OCRConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
 
@@ -67,6 +74,7 @@ class ConfigStore:
 
         openai_raw = raw.get("openai", {})
         dictionary_raw = raw.get("dictionary", {})
+        ocr_raw = raw.get("ocr", {})
         interaction_raw = raw.get("interaction", {})
         history_raw = raw.get("history", {})
 
@@ -88,6 +96,10 @@ class ConfigStore:
             ),
             dictionary=DictionaryConfig(
                 preferred_direction=dictionary_raw.get("preferred_direction", "auto"),
+            ),
+            ocr=OCRConfig(
+                windows_lang=str(ocr_raw.get("windows_lang", "auto") or "auto").strip().lower(),
+                timeout_sec=int(ocr_raw.get("timeout_sec", 6) or 6),
             ),
             interaction=InteractionConfig(
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
@@ -120,12 +132,14 @@ class ConfigStore:
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
-        cfg.interaction.selection_icon_delay_ms = max(300, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
+        cfg.interaction.selection_icon_delay_ms = max(0, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
         if cfg.history.retention_days not in {7, 30, 90}:
             cfg.history.retention_days = 30
         cfg.openai.multi_candidate_count = max(2, min(3, int(cfg.openai.multi_candidate_count or 3)))
         cfg.openai.multi_candidate_short_cn_max_chars = max(8, min(60, int(cfg.openai.multi_candidate_short_cn_max_chars or 24)))
         cfg.openai.multi_candidate_short_en_max_words = max(4, min(30, int(cfg.openai.multi_candidate_short_en_max_words or 12)))
+        cfg.ocr.windows_lang = str(cfg.ocr.windows_lang or "auto").strip().lower() or "auto"
+        cfg.ocr.timeout_sec = max(2, min(20, int(cfg.ocr.timeout_sec or 6)))
 
         return cfg
 

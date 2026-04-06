@@ -23,7 +23,6 @@ _configured = False
 NOISY_LOGGERS: dict[str, int] = {
     "argostranslate": logging.WARNING,
     "argostranslate.utils": logging.WARNING,
-    "RapidOCR": logging.WARNING,
 }
 
 

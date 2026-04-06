@@ -127,7 +127,11 @@ class NativeIconOverlay:
             self._x = int(x)
             self._y = int(y)
         self._ensure_thread()
-        hwnd = self._wait_hwnd()
+        hwnd = self._wait_hwnd(timeout=1.2)
+        if not hwnd:
+            # Retry once on slow window creation paths.
+            self._ensure_thread()
+            hwnd = self._wait_hwnd(timeout=0.8)
         if hwnd:
             user32.PostMessageW(hwnd, WM_APP_SHOW, 0, 0)
 

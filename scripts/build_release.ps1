@@ -44,27 +44,29 @@ with Image.open(png_path) as image:
 }
 
 if (-not $InstallerOnly) {
-    & $Py -m PyInstaller `
-        --noconfirm `
-        --clean `
-        --onedir `
-        --windowed `
-        --name WordPack `
-        --icon "icon/app-icon.ico" `
-        --add-data "icon;icon" `
-        --add-data "src/uia_capture.ps1;src" `
-        --add-data "src/ui_webview/frontend;src/ui_webview/frontend" `
-        --collect-data rapidocr `
-        --collect-binaries onnxruntime `
-        --hidden-import argostranslate `
-        --hidden-import argostranslate.package `
-        --hidden-import argostranslate.translate `
-        --exclude-module tkinter `
-        --exclude-module stanza `
-        --exclude-module spacy `
-        --exclude-module torch `
-        --exclude-module tensorflow `
-        app.py
+    $pyiArgs = @(
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--windowed",
+        "--name", "WordPack",
+        "--icon", "icon/app-icon.ico",
+        "--add-data", "icon;icon",
+        "--add-data", "src/uia_capture.ps1;src",
+        "--add-data", "src/windows_ocr.ps1;src",
+        "--add-data", "src/ui_webview/frontend;src/ui_webview/frontend",
+        "--hidden-import", "argostranslate",
+        "--hidden-import", "argostranslate.package",
+        "--hidden-import", "argostranslate.translate",
+        "--exclude-module", "tkinter",
+        "--exclude-module", "stanza",
+        "--exclude-module", "spacy",
+        "--exclude-module", "torch",
+        "--exclude-module", "tensorflow",
+        "app.py"
+    )
+
+    & $Py -m PyInstaller @pyiArgs
 }
 
 if (!(Test-Path "dist/WordPack/WordPack.exe")) {

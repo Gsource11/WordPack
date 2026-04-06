@@ -19,6 +19,10 @@
       html.preload-transparent body {
         background: transparent !important;
       }
+      html.preload-screenshot,
+      html.preload-screenshot body {
+        background: transparent !important;
+      }
     </style>
     <script>
       (function () {
@@ -30,8 +34,11 @@
         if (theme === "dark" && view === "main") {
           document.documentElement.classList.add("preload-dark");
         }
-        if (view === "icon" || view === "bubble" || view === "overlay") {
+        if (view === "icon" || view === "bubble") {
           document.documentElement.classList.add("preload-transparent");
+        }
+        if (view === "screenshot") {
+          document.documentElement.classList.add("preload-screenshot");
         }
         window.__WORDPACK_PRELOAD_VIEW__ = view;
         window.__WORDPACK_PRELOAD_THEME__ = theme === "dark" ? "dark" : "light";

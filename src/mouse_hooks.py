@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import logging
 import threading
 import time
 from ctypes import POINTER, WINFUNCTYPE, Structure, byref, cast, c_void_p, windll
@@ -44,8 +45,9 @@ LowLevelMouseProc = WINFUNCTYPE(wintypes.LPARAM, wintypes.INT, wintypes.WPARAM, 
 
 
 class MouseHookManager:
-    def __init__(self, callback) -> None:
+    def __init__(self, callback, logger: logging.Logger | None = None) -> None:
         self.callback = callback
+        self.logger = logger or logging.getLogger(__name__)
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
         self._stop_event = threading.Event()
@@ -111,7 +113,7 @@ class MouseHookManager:
                 down = self._last_down_pos
                 moved = abs(x - down[0]) + abs(y - down[1]) if down else 0
                 should_emit = moved >= 3 or self._click_count >= 2
-                if should_emit and now - self._last_left_up >= 0.05:
+                if should_emit:
                     down_x = int(down[0]) if down else int(x)
                     down_y = int(down[1]) if down else int(y)
                     payload = {
@@ -121,7 +123,11 @@ class MouseHookManager:
                         "down_y": down_y,
                         "ts": now,
                     }
-                    self.callback("selection_mouse_up", payload)
+                    try:
+                        self.callback("selection_mouse_up", payload)
+                    except Exception:
+                        # Keep hook callback resilient; one app-side exception should not break future mouse events.
+                        self.logger.exception("Mouse hook callback failed for selection_mouse_up")
                     self._click_count = 0
 
                 self._last_left_up = now

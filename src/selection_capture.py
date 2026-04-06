@@ -68,6 +68,8 @@ class SelectionCaptureResult:
 class SelectionCaptureService:
     def __init__(self) -> None:
         self.script_path = self._resolve_script_path()
+        self._uia_module = None
+        self._uia_import_error = ""
 
     def capture(
         self,
@@ -128,6 +130,233 @@ class SelectionCaptureService:
         )
 
     def capture_by_uia(self, payload: dict | None = None) -> SelectionCaptureResult:
+        inproc_result = self._capture_by_uia_inproc(payload)
+        if inproc_result.reason not in {"uia-module-missing", "uia-module-import-failed", "uia-internal-error"}:
+            return inproc_result
+
+        # Compatibility fallback: old PowerShell probe path.
+        # This remains only when in-process UIA runtime is unavailable.
+        ps_result = self._capture_by_uia_powershell(payload)
+        if ps_result.reason in {"uia-script-missing", "powershell-missing"}:
+            return inproc_result
+        return ps_result
+
+    def _capture_by_uia_inproc(self, payload: dict | None = None) -> SelectionCaptureResult:
+        module = self._load_uiautomation()
+        if module is None:
+            detail = self._uia_import_error or "uiautomation import failed"
+            return SelectionCaptureResult(
+                source="uia",
+                reason="uia-module-missing",
+                detail=detail,
+                uia_reason="uia-module-missing",
+                uia_detail=detail,
+            )
+        try:
+            return self._probe_with_uia_module(module, payload)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            return SelectionCaptureResult(
+                source="uia",
+                reason="uia-internal-error",
+                detail=self._truncate_detail(detail),
+                uia_reason="uia-internal-error",
+                uia_detail=self._truncate_detail(detail),
+            )
+
+    def _load_uiautomation(self):
+        if self._uia_module is not None:
+            return self._uia_module
+        try:
+            import uiautomation as auto  # type: ignore
+        except Exception as exc:
+            self._uia_import_error = f"{type(exc).__name__}: {exc}"
+            return None
+        self._uia_module = auto
+        self._uia_import_error = ""
+        return auto
+
+    def _probe_with_uia_module(self, auto, payload: dict | None = None) -> SelectionCaptureResult:
+        point = self._extract_probe_point(payload)
+        candidates: list[tuple[object, str]] = []
+        seen: set[str] = set()
+
+        if point is not None:
+            try:
+                ctrl = auto.ControlFromPoint(int(point[0]), int(point[1]))
+                if ctrl is not None:
+                    candidates.append((ctrl, "point"))
+            except Exception:
+                pass
+
+        try:
+            focused = auto.GetFocusedControl()
+            if focused is not None:
+                candidates.append((focused, "focused"))
+        except Exception:
+            pass
+
+        if not candidates:
+            return SelectionCaptureResult(
+                source="uia",
+                reason="no-focused-element",
+                strategy="none",
+                uia_reason="no-focused-element",
+            )
+
+        best: SelectionCaptureResult | None = None
+        for candidate, strategy in candidates:
+            current = candidate
+            depth = 0
+            while current is not None and depth <= 5:
+                runtime_key = self._runtime_key(current)
+                if runtime_key and runtime_key in seen:
+                    break
+                if runtime_key:
+                    seen.add(runtime_key)
+
+                current_strategy = strategy if depth == 0 else f"{strategy}-parent-{depth}"
+                probe = self._try_get_selected_text(current, current_strategy)
+                if probe.has_text():
+                    probe.reason = "ok"
+                    probe.uia_reason = "ok"
+                    return probe
+                if best is None:
+                    best = probe
+                elif best.stability != "stable" and probe.stability == "stable":
+                    best = probe
+                elif best.reason == "no-textpattern" and probe.reason != "no-textpattern":
+                    best = probe
+
+                depth += 1
+                current = self._safe_get_parent(current)
+
+        if best is not None:
+            return best
+        return SelectionCaptureResult(
+            source="uia",
+            reason="no-uia-candidate",
+            strategy="none",
+            uia_reason="no-uia-candidate",
+        )
+
+    def _runtime_key(self, control: object) -> str:
+        runtime_id = self._safe_get_attr(control, "RuntimeId")
+        if isinstance(runtime_id, (list, tuple)):
+            try:
+                return "-".join(str(int(item)) for item in runtime_id)
+            except Exception:
+                return "-".join(str(item) for item in runtime_id)
+        return ""
+
+    def _try_get_selected_text(self, control: object, strategy: str) -> SelectionCaptureResult:
+        control_type = self._normalize_control_type(self._safe_get_attr(control, "ControlTypeName"))
+        class_name = str(self._safe_get_attr(control, "ClassName") or "")
+        framework_id = str(self._safe_get_attr(control, "FrameworkId") or "")
+        is_password = bool(self._safe_get_attr(control, "IsPassword", False))
+        stability = self._get_stability(control_type, class_name)
+
+        result = SelectionCaptureResult(
+            source="uia",
+            reason="no-textpattern",
+            strategy=strategy,
+            control_type=control_type,
+            class_name=class_name,
+            framework_id=framework_id,
+            stability=stability,
+            is_password=is_password,
+            uia_reason="no-textpattern",
+        )
+        if is_password:
+            result.reason = "password-field"
+            result.uia_reason = "password-field"
+            return result
+
+        text_pattern = self._safe_call(control, "GetTextPattern")
+        if text_pattern is None:
+            return result
+
+        selections = self._safe_call(text_pattern, "GetSelection")
+        if selections is None:
+            result.reason = "empty-selection-array"
+            result.uia_reason = "empty-selection-array"
+            return result
+
+        texts: list[str] = []
+        try:
+            for item in selections:
+                text = str(self._safe_call(item, "GetText", -1) or "").strip()
+                if text:
+                    texts.append(text)
+        except Exception:
+            result.reason = "empty-selection"
+            result.uia_reason = "empty-selection"
+            return result
+
+        merged = "\n".join(texts).strip()
+        if not merged:
+            result.reason = "empty-selection"
+            result.uia_reason = "empty-selection"
+            return result
+
+        result.text = merged
+        result.reason = "ok"
+        result.uia_reason = "ok"
+        return result
+
+    @staticmethod
+    def _safe_get_attr(obj: object, name: str, default=None):
+        try:
+            return getattr(obj, name)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _safe_call(obj: object, method_name: str, *args):
+        try:
+            method = getattr(obj, method_name, None)
+            if method is None:
+                return None
+            return method(*args)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_get_parent(control: object):
+        try:
+            method = getattr(control, "GetParentControl", None)
+            if method is None:
+                return None
+            return method()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _normalize_control_type(value: str | None) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("ControlType."):
+            return raw
+        return f"ControlType.{raw}"
+
+    @staticmethod
+    def _get_stability(control_type: str, class_name: str) -> str:
+        problematic = {
+            "Chrome_RenderWidgetHostHWND",
+            "Chrome_WidgetWin_1",
+            "MozillaWindowClass",
+            "ConsoleWindowClass",
+        }
+        if control_type in {"ControlType.Edit", "ControlType.Document"}:
+            if class_name in problematic:
+                return "conditional"
+            return "stable"
+        if control_type in {"ControlType.Text", "ControlType.Pane", "ControlType.Custom"}:
+            return "conditional"
+        return "unknown"
+
+    def _capture_by_uia_powershell(self, payload: dict | None = None) -> SelectionCaptureResult:
         if not self.script_path.exists():
             detail = f"script={self.script_path}"
             return SelectionCaptureResult(
@@ -239,6 +468,9 @@ class SelectionCaptureService:
             "",
             "no-focused-element",
             "no-uia-candidate",
+            "uia-module-missing",
+            "uia-module-import-failed",
+            "uia-internal-error",
             "uia-script-missing",
             "powershell-missing",
             "uia-timeout",

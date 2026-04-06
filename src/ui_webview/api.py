@@ -95,3 +95,7 @@ class WindowApi:
 
     def finish_screenshot_selection(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._controller.finish_screenshot_selection(payload)
+
+    def screenshot_presented(self, session_id: int | None = None) -> dict[str, bool]:
+        self._controller.screenshot_presented(session_id=session_id)
+        return {"ok": True}

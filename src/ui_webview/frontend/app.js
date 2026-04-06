@@ -44,8 +44,11 @@
     bubble: null,
     bubbleCandidatePaneOpen: false,
     triggerMode: "click",
-    overlay: null,
-    overlayReady: false,
+    screenshot: null,
+    screenshotKeydownInstalled: false,
+    screenshotCancelHandler: null,
+    screenshotInteractionCleanup: null,
+    screenshotRenderToken: 0,
     historyPanel: {
       tab: "recent",
       q: "",
@@ -741,7 +744,7 @@
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
     if (payload.triggerMode) state.triggerMode = payload.triggerMode;
-    if (payload.overlay) state.overlay = payload.overlay;
+    if (payload.screenshot) state.screenshot = payload.screenshot;
     state.ui.theme_mode = state.themeMode;
     document.title = state.appTitle || "WordPack";
   }
@@ -815,19 +818,59 @@
     }
   }
 
-  function renderOverlay() {
-    const background = state.overlay?.backgroundDataUrl || "";
-    root.innerHTML = `
-      <div class="overlay-shell" id="overlayRoot">
-        <div class="overlay-background" style="background-image:url('${background}')"></div>
-        <div class="overlay-mask"></div>
-        <div class="overlay-hint">拖拽选择截图区域 · 右键 / Esc 取消</div>
-        <div class="overlay-selection hidden" id="overlaySelection" data-size=""></div>
-      </div>`;
-    if (!state.overlayReady) {
-      initOverlayInteractions();
-      state.overlayReady = true;
+  function renderScreenshot() {
+    if (typeof state.screenshotInteractionCleanup === "function") {
+      state.screenshotInteractionCleanup();
+      state.screenshotInteractionCleanup = null;
     }
+    state.screenshotRenderToken = Number(state.screenshotRenderToken || 0) + 1;
+    const renderToken = state.screenshotRenderToken;
+    const screenshot = state.screenshot || {};
+    const background = screenshot.backgroundDataUrl || "";
+    const sessionId = Number(screenshot.sessionId || 0);
+    root.innerHTML = `
+      <div class="screenshot-shell" id="screenshotRoot">
+        <img class="screenshot-image" id="screenshotImage" src="" alt="" draggable="false" />
+        <div class="screenshot-selection hidden" id="screenshotSelection" data-size=""></div>
+        <div class="screenshot-hint" id="screenshotHint">拖拽选择截图区域 · 右键 / Esc 取消</div>
+      </div>`;
+    const isCurrentRender = () => (
+      Number(state.screenshotRenderToken || 0) === renderToken
+      && Number(state.screenshot?.sessionId || 0) === sessionId
+    );
+    if (!background) {
+      initScreenshotInteractions();
+      return;
+    }
+    const img = document.getElementById("screenshotImage");
+    let presented = false;
+    const present = () => {
+      if (presented) return;
+      if (!isCurrentRender()) return;
+      presented = true;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          void apiCall("screenshot_presented", sessionId);
+        });
+      });
+    };
+    if (img instanceof HTMLImageElement) {
+      img.style.opacity = "0";
+      const onImageReady = () => {
+        if (!isCurrentRender()) return;
+        img.style.opacity = "1";
+        present();
+      };
+      img.addEventListener("load", onImageReady, { once: true });
+      img.addEventListener("error", onImageReady, { once: true });
+      img.src = background;
+      if (img.complete && img.naturalWidth > 0) {
+        onImageReady();
+      }
+    } else {
+      present();
+    }
+    initScreenshotInteractions();
   }
 
   function render() {
@@ -841,11 +884,242 @@
       renderIcon();
       return;
     }
-    if (state.view === "overlay") {
-      renderOverlay();
+    if (state.view === "screenshot") {
+      renderScreenshot();
       return;
     }
     renderMain();
+  }
+
+  function initScreenshotInteractions() {
+    const rootEl = document.getElementById("screenshotRoot");
+    const selection = document.getElementById("screenshotSelection");
+    const image = document.getElementById("screenshotImage");
+    const hint = document.getElementById("screenshotHint");
+    if (!rootEl || !selection || rootEl.dataset.bound === "true") return;
+    rootEl.dataset.bound = "true";
+    rootEl.setAttribute("tabindex", "-1");
+    try {
+      rootEl.focus();
+    } catch (_err) {
+      // no-op
+    }
+
+    let active = false;
+    let finishing = false;
+    let pointerId = null;
+    let startX = 0;
+    let startY = 0;
+
+    const bounds = state.screenshot?.bounds || { left: 0, top: 0, width: rootEl.clientWidth, height: rootEl.clientHeight };
+    const placeHintByGlobal = (globalX, globalY) => {
+      if (!hint) return;
+      const rect = rootEl.getBoundingClientRect();
+      const hintW = Math.max(120, hint.offsetWidth || 220);
+      const hintH = Math.max(28, hint.offsetHeight || 32);
+      const pad = 12;
+      const localX = Number(globalX || 0) - Number(bounds.left || 0);
+      const localY = Number(globalY || 0) - Number(bounds.top || 0);
+      const nextX = Math.max(pad, Math.min((rect.width - hintW - pad), localX + 16));
+      const nextY = Math.max(pad, Math.min((rect.height - hintH - pad), localY + 18));
+      hint.style.left = `${Math.round(nextX)}px`;
+      hint.style.top = `${Math.round(nextY)}px`;
+    };
+    placeHintByGlobal(Number(state.screenshot?.hintX || 0), Number(state.screenshot?.hintY || 0));
+
+    const toLocal = (clientX, clientY) => {
+      const rect = rootEl.getBoundingClientRect();
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      const x = Math.min(width, Math.max(0, clientX - rect.left));
+      const y = Math.min(height, Math.max(0, clientY - rect.top));
+      return { x, y, width, height };
+    };
+    const toGlobal = (x, y, renderWidth, renderHeight) => {
+      const width = Math.max(1, Number(renderWidth) || Number(rootEl.clientWidth) || 1);
+      const height = Math.max(1, Number(renderHeight) || Number(rootEl.clientHeight) || 1);
+      const naturalWidth = image instanceof HTMLImageElement ? Number(image.naturalWidth || 0) : 0;
+      const naturalHeight = image instanceof HTMLImageElement ? Number(image.naturalHeight || 0) : 0;
+      const fallbackWidth = Math.max(1, Number(bounds.width || width));
+      const fallbackHeight = Math.max(1, Number(bounds.height || height));
+      const scaleX = (naturalWidth > 0 ? naturalWidth : fallbackWidth) / width;
+      const scaleY = (naturalHeight > 0 ? naturalHeight : fallbackHeight) / height;
+      const gx = Number(bounds.left || 0) + (x * scaleX);
+      const gy = Number(bounds.top || 0) + (y * scaleY);
+      return {
+        x: Math.round(gx),
+        y: Math.round(gy),
+      };
+    };
+
+    const releasePointerCapture = () => {
+      if (pointerId === null || typeof rootEl.releasePointerCapture !== "function") return;
+      try {
+        rootEl.releasePointerCapture(pointerId);
+      } catch (_err) {
+        // no-op
+      }
+    };
+
+    const cancel = () => {
+      if (finishing) return;
+      releasePointerCapture();
+      active = false;
+      pointerId = null;
+      selection.classList.add("hidden");
+      void apiCall("cancel_screenshot_selection");
+    };
+    state.screenshotCancelHandler = cancel;
+
+    const draw = (x, y) => {
+      const left = Math.min(startX, x);
+      const top = Math.min(startY, y);
+      const width = Math.abs(x - startX);
+      const height = Math.abs(y - startY);
+      selection.classList.remove("hidden");
+      selection.style.left = `${left}px`;
+      selection.style.top = `${top}px`;
+      selection.style.width = `${width}px`;
+      selection.style.height = `${height}px`;
+    };
+
+    const onPointerDown = (event) => {
+      if (finishing) return;
+      if (event.button === 2) {
+        event.preventDefault();
+        cancel();
+        return;
+      }
+      if (event.button !== 0 || !event.isPrimary) return;
+      event.preventDefault();
+      const point = toLocal(event.clientX, event.clientY);
+      active = true;
+      pointerId = Number(event.pointerId);
+      startX = point.x;
+      startY = point.y;
+      if (hint) {
+        hint.classList.add("hidden");
+      }
+      if (typeof rootEl.setPointerCapture === "function") {
+        try {
+          rootEl.setPointerCapture(event.pointerId);
+        } catch (_err) {
+          // no-op
+        }
+      }
+      draw(startX, startY);
+    };
+    rootEl.addEventListener("pointerdown", onPointerDown);
+
+    const onPointerMove = (event) => {
+      if (!active) {
+        const point = toLocal(event.clientX, event.clientY);
+        placeHintByGlobal(Number(bounds.left || 0) + point.x, Number(bounds.top || 0) + point.y);
+        return;
+      }
+      if (!active || finishing) return;
+      if (pointerId !== null && Number(event.pointerId) !== pointerId) return;
+      const point = toLocal(event.clientX, event.clientY);
+      draw(point.x, point.y);
+    };
+    rootEl.addEventListener("pointermove", onPointerMove);
+
+    const finishByPoint = (clientX, clientY) => {
+      if (!active || finishing) return;
+      const point = toLocal(clientX, clientY);
+      const renderWidth = point.width;
+      const renderHeight = point.height;
+      const left = Math.min(startX, point.x);
+      const top = Math.min(startY, point.y);
+      const right = Math.max(startX, point.x);
+      const bottom = Math.max(startY, point.y);
+      active = false;
+      finishing = true;
+      releasePointerCapture();
+      pointerId = null;
+      const start = toGlobal(left, top, renderWidth, renderHeight);
+      const end = toGlobal(right, bottom, renderWidth, renderHeight);
+      const sessionId = Number(state.screenshot?.sessionId || 0);
+      const finishGuard = window.setTimeout(() => {
+        if (finishing) {
+          finishing = false;
+          cancel();
+        }
+      }, 2500);
+      void apiCall("finish_screenshot_selection", {
+        sessionId,
+        left: start.x,
+        top: start.y,
+        right: end.x,
+        bottom: end.y,
+      }).then((response) => {
+        window.clearTimeout(finishGuard);
+        if (!response || response.ok === false) {
+          finishing = false;
+          cancel();
+        }
+      }).catch(() => {
+        window.clearTimeout(finishGuard);
+        finishing = false;
+        cancel();
+      });
+    };
+    const onPointerUp = (event) => {
+      if (pointerId !== null && Number(event.pointerId) !== pointerId) return;
+      event.preventDefault();
+      finishByPoint(event.clientX, event.clientY);
+    };
+    rootEl.addEventListener("pointerup", onPointerUp);
+    const onWindowPointerUp = (event) => {
+      if (!active) return;
+      if (pointerId !== null && Number(event.pointerId) !== pointerId) return;
+      finishByPoint(event.clientX, event.clientY);
+    };
+    window.addEventListener("pointerup", onWindowPointerUp);
+    const onPointerCancel = () => {
+      releasePointerCapture();
+      if (active) cancel();
+    };
+    rootEl.addEventListener("pointercancel", onPointerCancel);
+    const onLostPointerCapture = () => {
+      if (active && !finishing) {
+        cancel();
+      }
+    };
+    rootEl.addEventListener("lostpointercapture", onLostPointerCapture);
+
+    const onContextMenu = (event) => {
+      event.preventDefault();
+      cancel();
+    };
+    rootEl.addEventListener("contextmenu", onContextMenu);
+
+    state.screenshotInteractionCleanup = () => {
+      releasePointerCapture();
+      active = false;
+      pointerId = null;
+      rootEl.removeEventListener("pointerdown", onPointerDown);
+      rootEl.removeEventListener("pointermove", onPointerMove);
+      rootEl.removeEventListener("pointerup", onPointerUp);
+      rootEl.removeEventListener("pointercancel", onPointerCancel);
+      rootEl.removeEventListener("lostpointercapture", onLostPointerCapture);
+      rootEl.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("pointerup", onWindowPointerUp);
+    };
+
+    if (!state.screenshotKeydownInstalled) {
+      state.screenshotKeydownInstalled = true;
+      const onKey = (event) => {
+        if (state.view === "screenshot" && event.key === "Escape") {
+          event.preventDefault();
+          if (typeof state.screenshotCancelHandler === "function") {
+            state.screenshotCancelHandler();
+          }
+        }
+      };
+      document.addEventListener("keydown", onKey);
+      window.addEventListener("keydown", onKey);
+    }
   }
 
   function installDragHandles() {
@@ -878,71 +1152,6 @@
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp, { once: true });
       });
-    });
-  }
-
-  function initOverlayInteractions() {
-    const overlayRoot = document.getElementById("overlayRoot");
-    const selection = document.getElementById("overlaySelection");
-    if (!overlayRoot || !selection) return;
-
-    let active = false;
-    let startX = 0;
-    let startY = 0;
-
-    const bounds = state.overlay?.bounds || { left: 0, top: 0, width: overlayRoot.clientWidth, height: overlayRoot.clientHeight };
-    const toGlobal = (x, y) => ({
-      x: Math.round(bounds.left + (x / overlayRoot.clientWidth) * bounds.width),
-      y: Math.round(bounds.top + (y / overlayRoot.clientHeight) * bounds.height),
-    });
-
-    const draw = (x, y) => {
-      const left = Math.min(startX, x);
-      const top = Math.min(startY, y);
-      const width = Math.abs(x - startX);
-      const height = Math.abs(y - startY);
-      selection.classList.remove("hidden");
-      selection.style.left = `${left}px`;
-      selection.style.top = `${top}px`;
-      selection.style.width = `${width}px`;
-      selection.style.height = `${height}px`;
-      selection.dataset.size = `${Math.round((width / overlayRoot.clientWidth) * bounds.width)} x ${Math.round((height / overlayRoot.clientHeight) * bounds.height)}`;
-    };
-
-    overlayRoot.addEventListener("mousedown", (event) => {
-      if (event.button !== 0) return;
-      active = true;
-      startX = event.clientX;
-      startY = event.clientY;
-      draw(startX, startY);
-    });
-
-    overlayRoot.addEventListener("mousemove", (event) => {
-      if (!active) return;
-      draw(event.clientX, event.clientY);
-    });
-
-    overlayRoot.addEventListener("mouseup", (event) => {
-      if (!active) return;
-      active = false;
-      const left = Math.min(startX, event.clientX);
-      const top = Math.min(startY, event.clientY);
-      const right = Math.max(startX, event.clientX);
-      const bottom = Math.max(startY, event.clientY);
-      const start = toGlobal(left, top);
-      const end = toGlobal(right, bottom);
-      void apiCall("finish_screenshot_selection", { left: start.x, top: start.y, right: end.x, bottom: end.y });
-    });
-
-    overlayRoot.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      void apiCall("cancel_screenshot_selection");
-    });
-
-    document.addEventListener("keydown", (event) => {
-      if (state.view === "overlay" && event.key === "Escape") {
-        void apiCall("cancel_screenshot_selection");
-      }
     });
   }
 
@@ -1235,7 +1444,7 @@
                 ${selectionTriggerMode === "icon" ? `
                   <div class="field">
                     <label>图标延时(ms)</label>
-                    <input type="number" min="300" max="5000" step="100" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 1500)}" />
+                    <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 1500)}" />
                   </div>
                 ` : ""}
               ` : ""}
@@ -1658,6 +1867,7 @@
         await openSettingsPanel();
         break;
       case "close-settings":
+        scheduleSettingsSave(true);
         clearSideSheetOpenTimer();
         state.settingsOpen = false;
         rerender();
@@ -1930,7 +2140,24 @@
         await apiCall("test_ai_connection");
         break;
       case "import-dictionary-model":
-        await apiCall("import_dictionary_model");
+        try {
+          const response = await apiCall("import_dictionary_model");
+          if (!response) {
+            showToast("error", "导入入口不可用，请重试");
+            break;
+          }
+          if (!response.ok) {
+            const message = String(response.message || "");
+            if (message && !message.includes("已取消导入")) {
+              showToast("warning", message);
+            }
+            break;
+          }
+          showToast("success", String(response.message || "已开始导入词典模型"));
+        } catch (error) {
+          const message = String(error?.message || "").trim();
+          showToast("error", message || "导入词典模型失败，请重试");
+        }
         break;
       case "ollama-defaults":
         if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
@@ -2039,8 +2266,11 @@
     const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
     setValue(state.settingsDraft, field, value);
     if (state.settingsOpen) {
-      const immediate = event.target.type === "checkbox" || event.type === "change";
-      scheduleSettingsSave(immediate);
+      const tagName = String(event.target.tagName || "").toUpperCase();
+      const immediate = event.target.type === "checkbox" || tagName === "SELECT" || event.type === "change";
+      if (immediate) {
+        scheduleSettingsSave(true);
+      }
     }
     if (field.startsWith("openai.")) {
       state.aiTestState = "idle";
@@ -2076,7 +2306,11 @@
           state.candidateItems = [];
           state.candidateReqId = 0;
         }
-        state.settingsDraft = clone(state.config || {});
+        if (!state.settingsOpen) {
+          state.settingsDraft = clone(state.config || {});
+        } else {
+          shouldRerender = false;
+        }
         setTheme(payload.themeMode || payload.settings?.effectiveTheme || "light");
         break;
       case "translation-start":
@@ -2303,12 +2537,23 @@
         }
         if (state.view === "bubble" && patchBubbleDynamic()) return;
         break;
+      case "screenshot-session-start":
+        state.screenshot = payload.screenshot || state.screenshot;
+        if (state.view === "screenshot") {
+          rerender();
+          return;
+        }
+        break;
+      case "screenshot-session-clear":
+        state.screenshot = { sessionId: 0, backgroundDataUrl: "", bounds: {} };
+        if (state.view === "screenshot") {
+          rerender();
+          return;
+        }
+        break;
       case "screenshot-ocr-ready":
         state.sourceText = payload.sourceText || state.sourceText;
         if (patchMainDynamic()) return;
-        break;
-      case "screenshot-ocr-error":
-        showToast("error", payload.message || "截图识别失败");
         break;
       case "tray-open-panel":
         {
@@ -2352,6 +2597,10 @@
       return;
     }
 
+    if (state.settingsOpen && target.dataset.field && event.key === "Enter" && !target.dataset.shortcutField) {
+      scheduleSettingsSave(true);
+    }
+
     const shortcutField = target.dataset.shortcutField;
     if (!shortcutField) return;
 
@@ -2364,6 +2613,17 @@
     }
     setValue(state.settingsDraft, shortcutField, shortcut);
     target.value = shortcut;
+  }
+
+  function handleSettingsFieldBlur(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (!state.settingsOpen || !target.dataset.field) {
+      return;
+    }
+    scheduleSettingsSave(true);
   }
 
   window.WordPack = {
@@ -2379,6 +2639,7 @@
   document.addEventListener("input", handleInput);
   document.addEventListener("change", handleInput);
   document.addEventListener("keydown", handleKeydown);
+  document.addEventListener("focusout", handleSettingsFieldBlur, true);
   document.addEventListener("scroll", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;

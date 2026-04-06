@@ -85,3 +85,28 @@ WordPack/
 建议仅提交脚本和配置：
 - `scripts/build_release.ps1`
 - `scripts/WordPack.iss`
+
+## 2026 Refactor Notes
+
+### Screenshot Capture Path
+- Screenshot translation now uses an in-app `screenshot` window flow (Pot-style):
+  - Capture virtual screen once
+  - User drag-select region
+  - Crop and OCR/translate
+- System snipping (`ms-screenclip`) is no longer the default path.
+
+### OCR Engine
+- OCR is now Windows OCR only.
+- OCR config section in `config.json`:
+  - `ocr.windows_lang`: default `auto`
+  - `ocr.timeout_sec`: default `6`
+
+### Build
+- Use a single dependency set:
+  - `requirements.txt`
+- Build script no longer includes OCR-pack variant toggles:
+
+```powershell
+# Standard package
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Clean
+```

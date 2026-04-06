@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import io
 import time
 from ctypes import POINTER, Structure, byref, c_size_t, memmove, sizeof, windll, wstring_at
 from ctypes import wintypes
@@ -63,14 +61,25 @@ def get_virtual_screen_bounds() -> ScreenBounds:
 
 
 def capture_virtual_screen():
-    return capture_screen_region(get_virtual_screen_region())
-
-
-def image_to_data_url(image) -> str:
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+    region = get_virtual_screen_region()
+    # On some systems the first frame after hotkey/activation can be stale.
+    # Flush compositor + take warm-up frames, and use the last frame.
+    try:
+        windll.dwmapi.DwmFlush()
+    except Exception:
+        pass
+    latest = capture_screen_region(region)
+    try:
+        for _ in range(2):
+            time.sleep(0.010)
+            try:
+                windll.dwmapi.DwmFlush()
+            except Exception:
+                pass
+            latest = capture_screen_region(region)
+        return latest
+    except Exception:
+        return latest
 
 
 def get_cursor_position() -> tuple[int, int]:
