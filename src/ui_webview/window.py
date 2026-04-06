@@ -62,6 +62,7 @@ class WordPackWebviewApp:
     AI_PROBE_INTERVAL_SEC = 3600
     AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
     WEBVIEW2_RUNTIME_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    WEBVIEW2_DOWNLOAD_PAGE = "https://developer.microsoft.com/microsoft-edge/webview2/"
     STARTUP_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
     STARTUP_RUN_VALUE_NAME = "WordPack"
 
@@ -371,7 +372,10 @@ class WordPackWebviewApp:
         message = (
             "检测到 WebView2 Runtime 不可用。\n"
             "WordPack 需要 WebView2 才能运行（不再回退到 mshtml）。\n\n"
-            "请先安装后重试：\n"
+            "请先安装后重试。\n\n"
+            "下载地址：\n"
+            f"{self.WEBVIEW2_DOWNLOAD_PAGE}\n\n"
+            "（可选命令行安装）\n"
             "winget install --id Microsoft.EdgeWebView2Runtime --silent --accept-package-agreements --accept-source-agreements"
         )
         self.logger.error(message.replace("\n", " "))

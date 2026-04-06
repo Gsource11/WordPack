@@ -123,6 +123,13 @@ class TrayIconManager:
     ID_SELECTION = 1005
     ID_SCREENSHOT = 1006
     ID_STARTUP = 1007
+    LABEL_STARTUP = "\u5f00\u673a\u81ea\u542f\u52a8"
+    LABEL_MAIN = "\u4e3b\u754c\u9762"
+    LABEL_HISTORY = "\u5386\u53f2"
+    LABEL_SETTINGS = "\u8bbe\u7f6e"
+    LABEL_SELECTION = "\u5212\u8bcd"
+    LABEL_SCREENSHOT = "\u622a\u56fe"
+    LABEL_EXIT = "\u9000\u51fa"
 
     def __init__(
         self,
@@ -305,29 +312,29 @@ class TrayIconManager:
         screenshot_enabled = bool(state.get("screenshot_enabled", True))
 
         # Menu appears top->bottom.
-        # Keep "开机自启动" as the first item for quick access.
+        # Keep labels as explicit Unicode escapes to avoid source-encoding issues.
         user32.AppendMenuW(
             menu,
             MF_BYPOSITION | MF_STRING | (MF_CHECKED if startup_enabled else 0),
             self.ID_STARTUP,
-            "开机自启动",
+            self.LABEL_STARTUP,
         )
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_MAIN, "主界面")
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_HISTORY, "历史")
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_SETTINGS, "设置")
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_MAIN, self.LABEL_MAIN)
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_HISTORY, self.LABEL_HISTORY)
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_SETTINGS, self.LABEL_SETTINGS)
         user32.AppendMenuW(
             menu,
             MF_BYPOSITION | MF_STRING | (MF_CHECKED if selection_enabled else 0),
             self.ID_SELECTION,
-            "划词",
+            self.LABEL_SELECTION,
         )
         user32.AppendMenuW(
             menu,
             MF_BYPOSITION | MF_STRING | (MF_CHECKED if screenshot_enabled else 0),
             self.ID_SCREENSHOT,
-            "截图",
+            self.LABEL_SCREENSHOT,
         )
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_EXIT, "退出")
+        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_EXIT, self.LABEL_EXIT)
 
         pt = POINT()
         user32.GetCursorPos(byref(pt))
