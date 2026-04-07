@@ -12,7 +12,6 @@ kernel32 = windll.kernel32
 shell32 = windll.shell32
 
 WM_APP = 0x8000
-WM_COMMAND = 0x0111
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_QUIT = 0x0012
@@ -20,7 +19,6 @@ WM_CONTEXTMENU = 0x007B
 WM_RBUTTONDOWN = 0x0204
 WM_RBUTTONUP = 0x0205
 WM_LBUTTONDBLCLK = 0x0203
-WM_NULL = 0x0000
 
 NIM_ADD = 0x00000000
 NIM_DELETE = 0x00000002
@@ -31,16 +29,6 @@ NIF_ICON = 0x00000002
 NIF_TIP = 0x00000004
 
 NOTIFYICON_VERSION_3 = 3
-
-MF_STRING = 0x00000000
-MF_CHECKED = 0x00000008
-MF_BYPOSITION = 0x00000400
-
-TPM_LEFTALIGN = 0x0000
-TPM_BOTTOMALIGN = 0x0020
-TPM_RIGHTBUTTON = 0x0002
-TPM_RETURNCMD = 0x0100
-TPM_NONOTIFY = 0x0080
 
 IMAGE_ICON = 1
 LR_LOADFROMFILE = 0x00000010
@@ -116,34 +104,17 @@ shell32.Shell_NotifyIconW.restype = wintypes.BOOL
 
 
 class TrayIconManager:
-    ID_EXIT = 1001
-    ID_MAIN = 1002
-    ID_HISTORY = 1003
-    ID_SETTINGS = 1004
-    ID_SELECTION = 1005
-    ID_SCREENSHOT = 1006
-    ID_STARTUP = 1007
-    LABEL_STARTUP = "\u5f00\u673a\u81ea\u542f\u52a8"
-    LABEL_MAIN = "\u4e3b\u754c\u9762"
-    LABEL_HISTORY = "\u5386\u53f2"
-    LABEL_SETTINGS = "\u8bbe\u7f6e"
-    LABEL_SELECTION = "\u5212\u8bcd"
-    LABEL_SCREENSHOT = "\u622a\u56fe"
-    LABEL_EXIT = "\u9000\u51fa"
-
     def __init__(
         self,
         *,
         title: str,
         icon_path: str,
         on_action: Callable[[str, dict[str, Any] | None], None],
-        state_getter: Callable[[], dict[str, bool]],
         logger,
     ) -> None:
         self._title = str(title or "WordPack")
         self._icon_path = str(icon_path or "")
         self._on_action = on_action
-        self._state_getter = state_getter
         self._logger = logger
 
         self._thread: threading.Thread | None = None
@@ -290,10 +261,6 @@ class TrayIconManager:
                 if raw_event == WM_LBUTTONDBLCLK or event_code == WM_LBUTTONDBLCLK:
                     self._dispatch_action("show_main")
                     return 0
-            elif message == WM_COMMAND:
-                command_id = int(w_param) & 0xFFFF
-                self._handle_command(command_id)
-                return 0
             elif message == WM_DESTROY:
                 user32.PostQuitMessage(0)
                 return 0
@@ -303,72 +270,6 @@ class TrayIconManager:
         except Exception:
             self._logger.exception("Error in tray window proc")
         return user32.DefWindowProcW(hwnd, message, w_param, l_param)
-
-    def _show_context_menu(self, hwnd: int) -> None:
-        menu = user32.CreatePopupMenu()
-        if not menu:
-            return
-        state = self._state_getter() or {}
-        startup_enabled = bool(state.get("startup_launch_enabled", False))
-        selection_enabled = bool(state.get("selection_enabled", True))
-        screenshot_enabled = bool(state.get("screenshot_enabled", True))
-
-        # Menu appears top->bottom.
-        # Keep labels as explicit Unicode escapes to avoid source-encoding issues.
-        user32.AppendMenuW(
-            menu,
-            MF_BYPOSITION | MF_STRING | (MF_CHECKED if startup_enabled else 0),
-            self.ID_STARTUP,
-            self.LABEL_STARTUP,
-        )
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_MAIN, self.LABEL_MAIN)
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_HISTORY, self.LABEL_HISTORY)
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_SETTINGS, self.LABEL_SETTINGS)
-        user32.AppendMenuW(
-            menu,
-            MF_BYPOSITION | MF_STRING | (MF_CHECKED if selection_enabled else 0),
-            self.ID_SELECTION,
-            self.LABEL_SELECTION,
-        )
-        user32.AppendMenuW(
-            menu,
-            MF_BYPOSITION | MF_STRING | (MF_CHECKED if screenshot_enabled else 0),
-            self.ID_SCREENSHOT,
-            self.LABEL_SCREENSHOT,
-        )
-        user32.AppendMenuW(menu, MF_BYPOSITION | MF_STRING, self.ID_EXIT, self.LABEL_EXIT)
-
-        pt = POINT()
-        user32.GetCursorPos(byref(pt))
-        user32.SetForegroundWindow(hwnd)
-        command = user32.TrackPopupMenu(
-            menu,
-            TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-            int(pt.x),
-            int(pt.y),
-            0,
-            hwnd,
-            None,
-        )
-        user32.PostMessageW(hwnd, WM_NULL, 0, 0)
-        user32.DestroyMenu(menu)
-        if command:
-            self._handle_command(int(command))
-
-    def _handle_command(self, command_id: int) -> None:
-        action_map = {
-            self.ID_EXIT: "exit",
-            self.ID_MAIN: "show_main",
-            self.ID_HISTORY: "open_history",
-            self.ID_SETTINGS: "open_settings",
-            self.ID_SELECTION: "toggle_selection",
-            self.ID_SCREENSHOT: "toggle_screenshot",
-            self.ID_STARTUP: "toggle_startup",
-        }
-        action = action_map.get(int(command_id))
-        if not action:
-            return
-        self._dispatch_action(action)
 
     def _dispatch_action(self, action: str, payload: dict[str, Any] | None = None) -> None:
         try:

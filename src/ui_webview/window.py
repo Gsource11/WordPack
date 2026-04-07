@@ -63,6 +63,8 @@ class WordPackWebviewApp:
     ICON_HEIGHT = 34
     TRAY_MENU_WIDTH = 286
     TRAY_MENU_HEIGHT = 338
+    TRAY_SHOW_DELAY_MS = 28
+    TRAY_BLUR_GUARD_MS = 320
     AI_PROBE_INTERVAL_SEC = 3600
     AI_STARTUP_CACHE_MAX_AGE_SEC = 86400
     WEBVIEW2_RUNTIME_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -131,11 +133,6 @@ class WordPackWebviewApp:
             title=APP_TITLE,
             icon_path=str(tray_icon),
             on_action=self._on_tray_action,
-            state_getter=lambda: {
-                "startup_launch_enabled": bool(self.config.interaction.startup_launch_enabled),
-                "selection_enabled": bool(self.config.interaction.selection_enabled),
-                "screenshot_enabled": bool(self.config.interaction.screenshot_enabled),
-            },
             logger=self.logger,
         )
 
@@ -208,7 +205,11 @@ class WordPackWebviewApp:
         self._webview_started = False
         self._tray_window_ready = False
         self._tray_window_shape_applied = False
+        self._tray_window_popup_flags_applied = False
+        self._tray_window_created_at = 0.0
         self._pending_tray_anchor: dict[str, int] | None = None
+        self._tray_show_timer: threading.Timer | None = None
+        self._tray_show_ticket = 0
 
     def _resolve_data_dir(self, legacy_candidates: list[Path]) -> Path:
         def first_legacy_dir() -> Path:
@@ -837,77 +838,134 @@ class WordPackWebviewApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_tray_window_shape_fix(self, window) -> None:
-        def worker() -> None:
+    def _apply_tray_window_shape_fix(self, window, *, wait: bool = False) -> None:
+        def apply() -> None:
+            native = getattr(window, "native", None)
+            if native is None:
+                return
+            handle = getattr(native, "Handle", None)
+            if handle is None:
+                return
+
+            hwnd = self._native_handle_to_int(handle)
+            if not hwnd:
+                return
+
+            # Prefer DWM compositor rounded corners (anti-aliased) on
+            # supported Windows versions. SetWindowRgn is a hard clip fallback.
             try:
-                if not window.events.shown.wait(2.0):
-                    return
-                native = getattr(window, "native", None)
-                if native is None:
-                    return
-                handle = getattr(native, "Handle", None)
-                if handle is None:
-                    return
-
-                hwnd = self._native_handle_to_int(handle)
-                if not hwnd:
-                    return
-
-                # Prefer DWM compositor rounded corners (anti-aliased) on
-                # supported Windows versions. SetWindowRgn is a hard clip and
-                # can produce visible jagged edges on curved corners.
-                try:
-                    DWMWA_WINDOW_CORNER_PREFERENCE = 33
-                    DWMWCP_ROUND = 2
-                    preference = ctypes.c_int(DWMWCP_ROUND)
-                    dwm = ctypes.windll.dwmapi
-                    hr = int(
-                        dwm.DwmSetWindowAttribute(
-                            ctypes.c_void_p(hwnd),
-                            ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
-                            ctypes.byref(preference),
-                            ctypes.sizeof(preference),
-                        )
+                DWMWA_WINDOW_CORNER_PREFERENCE = 33
+                DWMWCP_ROUND = 2
+                preference = ctypes.c_int(DWMWCP_ROUND)
+                dwm = ctypes.windll.dwmapi
+                hr = int(
+                    dwm.DwmSetWindowAttribute(
+                        ctypes.c_void_p(hwnd),
+                        ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
+                        ctypes.byref(preference),
+                        ctypes.sizeof(preference),
                     )
-                    if hr == 0:
-                        return
-                except Exception:
-                    pass
-
-                rect = wintypes.RECT()
-                if not ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)):
-                    return
-
-                client_width = max(0, int(rect.right - rect.left))
-                client_height = max(0, int(rect.bottom - rect.top))
-                if client_width <= 0 or client_height <= 0:
-                    return
-
-                radius = max(16, min(28, int(min(client_width, client_height) // 6)))
-                region = ctypes.windll.gdi32.CreateRoundRectRgn(
-                    0,
-                    0,
-                    client_width + 1,
-                    client_height + 1,
-                    radius,
-                    radius,
                 )
-                if not region:
+                if hr == 0:
                     return
-                if not ctypes.windll.user32.SetWindowRgn(hwnd, region, True):
-                    ctypes.windll.gdi32.DeleteObject(region)
             except Exception:
-                self.logger.exception("Failed to apply tray window shape fix")
+                pass
 
-        threading.Thread(target=worker, daemon=True).start()
+            rect = wintypes.RECT()
+            has_rect = bool(ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)))
+            client_width = max(0, int(rect.right - rect.left)) if has_rect else 0
+            client_height = max(0, int(rect.bottom - rect.top)) if has_rect else 0
+            if client_width <= 0 or client_height <= 0:
+                client_width = int(self.TRAY_MENU_WIDTH)
+                client_height = int(self.TRAY_MENU_HEIGHT)
+            if client_width <= 0 or client_height <= 0:
+                return
+
+            radius = max(16, min(28, int(min(client_width, client_height) // 6)))
+            region = ctypes.windll.gdi32.CreateRoundRectRgn(
+                0,
+                0,
+                client_width + 1,
+                client_height + 1,
+                radius,
+                radius,
+            )
+            if not region:
+                return
+            if not ctypes.windll.user32.SetWindowRgn(hwnd, region, True):
+                ctypes.windll.gdi32.DeleteObject(region)
+
+        try:
+            self._run_on_window_ui(
+                window,
+                apply,
+                wait=wait,
+                log_prefix="apply_tray_window_shape_fix",
+            )
+        except Exception:
+            self.logger.exception("Failed to schedule tray window shape fix")
+
+    def _apply_tray_window_popup_flags(self, window, *, wait: bool = False) -> None:
+        # Keep custom tray window out of taskbar/Alt-Tab while preserving webview rendering.
+        def apply() -> None:
+            native = getattr(window, "native", None)
+            if native is None:
+                return
+
+            try:
+                native.ShowInTaskbar = False
+            except Exception:
+                pass
+            try:
+                native.ShowIcon = False
+            except Exception:
+                pass
+
+            handle = getattr(native, "Handle", None)
+            hwnd = self._native_handle_to_int(handle)
+            if not hwnd:
+                return
+
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+
+            try:
+                current = int(user32.GetWindowLongW(int(hwnd), GWL_EXSTYLE))
+                desired = (current | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                if desired != current:
+                    user32.SetWindowLongW(int(hwnd), GWL_EXSTYLE, int(desired))
+                    user32.SetWindowPos(
+                        int(hwnd),
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                    )
+            except Exception:
+                self.logger.exception("Failed to apply tray window popup style flags")
+
+        try:
+            self._run_on_window_ui(
+                window,
+                apply,
+                wait=wait,
+                log_prefix="apply_tray_window_popup_flags",
+            )
+        except Exception:
+            self.logger.exception("Failed to schedule tray window popup flags")
 
     def _on_webview_started(self) -> None:
         self._webview_started = True
         self.logger.info("Starting background input services")
-        try:
-            self._ensure_tray_window()
-        except Exception:
-            self.logger.exception("Failed to prewarm tray window")
         try:
             if self.main_window is not None:
                 current = self._current_main_geometry()
@@ -1033,7 +1091,10 @@ class WordPackWebviewApp:
                 self.tray_window = None
                 self._tray_window_ready = False
                 self._tray_window_shape_applied = False
+                self._tray_window_popup_flags_applied = False
+                self._tray_window_created_at = 0.0
                 self._pending_tray_anchor = None
+                self._cancel_tray_show_timer()
 
         if kind == "main" and not self._shutting_down:
             self.shutdown()
@@ -1126,6 +1187,13 @@ class WordPackWebviewApp:
         self.bridge.mark_ready(kind)
         if kind == "tray":
             self._tray_window_ready = True
+            if self.tray_window is not None:
+                if not self._tray_window_popup_flags_applied:
+                    self._apply_tray_window_popup_flags(self.tray_window, wait=True)
+                    self._tray_window_popup_flags_applied = True
+                if not self._tray_window_shape_applied:
+                    self._apply_tray_window_shape_fix(self.tray_window, wait=True)
+                    self._tray_window_shape_applied = True
             pending = dict(self._pending_tray_anchor or {})
             self._pending_tray_anchor = None
             if pending:
@@ -1436,6 +1504,14 @@ class WordPackWebviewApp:
         y = max(bounds.top + margin, min(y, max_y))
         return int(x), int(y)
 
+    def _cancel_tray_show_timer(self) -> None:
+        if self._tray_show_timer is not None:
+            try:
+                self._tray_show_timer.cancel()
+            except Exception:
+                pass
+        self._tray_show_timer = None
+
     def _ensure_tray_window(self) -> bool:
         if self.tray_window is not None:
             return True
@@ -1457,16 +1533,19 @@ class WordPackWebviewApp:
                 shadow=False,
                 resizable=False,
                 on_top=True,
-                focus=False,
+                focus=True,
                 transparent=True,
                 hidden=True,
             )
             self._tray_window_ready = False
             self._tray_window_shape_applied = False
+            self._tray_window_popup_flags_applied = False
+            self._tray_window_created_at = time.time()
             return True
         except Exception:
             self.logger.exception("Failed to create tray window")
             self.tray_window = None
+            self._tray_window_created_at = 0.0
             return False
 
     def _show_tray_menu(self, payload: dict[str, Any] | None = None) -> None:
@@ -1478,18 +1557,70 @@ class WordPackWebviewApp:
         anchor_x = int((payload or {}).get("x", cursor_x))
         anchor_y = int((payload or {}).get("y", cursor_y))
         if not self._tray_window_ready:
+            # Guard against a stale pre-created tray window that never reaches
+            # frontend-ready (e.g. transient WebView2 init abort). Recreate on demand.
+            age = (time.time() - float(self._tray_window_created_at or 0.0)) if self._tray_window_created_at > 0 else 0.0
+            if age >= 2.0 and self.tray_window is not None:
+                try:
+                    self.tray_window.destroy()
+                except Exception:
+                    self.logger.exception("Failed to destroy stale tray window before recreate")
+                self.tray_window = None
+                self._tray_window_shape_applied = False
+                self._tray_window_popup_flags_applied = False
+                self._tray_window_created_at = 0.0
+                self._ensure_tray_window()
             self._pending_tray_anchor = {"x": int(anchor_x), "y": int(anchor_y)}
             return
         x, y = self._tray_menu_position(anchor_x, anchor_y)
-        try:
-            self.tray_window.move(x, y)
-            self.tray_window.show()
-            if not self._tray_window_shape_applied:
-                self._apply_tray_window_shape_fix(self.tray_window)
-                self._tray_window_shape_applied = True
-        except Exception:
-            self.logger.exception("Failed to show tray menu window")
+        # Update tray DOM while still hidden to avoid a visible second paint.
+        self.bridge.send(
+            "tray",
+            "tray-opening",
+            {"guardMs": int(max(180, self.TRAY_BLUR_GUARD_MS))},
+        )
         self._emit_tray_menu_updated()
+        self._cancel_tray_show_timer()
+        self._tray_show_ticket += 1
+        ticket = int(self._tray_show_ticket)
+
+        def reveal() -> None:
+            if ticket != int(self._tray_show_ticket):
+                return
+            if (not self._tray_window_ready) or self.tray_window is None:
+                return
+            window = self.tray_window
+
+            def do_reveal() -> None:
+                if window is None:
+                    return
+                try:
+                    window.move(x, y)
+                    window.show()
+                except Exception:
+                    self.logger.exception("Failed to show tray menu window")
+
+            try:
+                self._run_on_window_ui(
+                    window,
+                    do_reveal,
+                    wait=False,
+                    log_prefix="tray.reveal",
+                )
+            except Exception:
+                self.logger.exception("Failed to schedule tray menu reveal")
+
+        delay_ms = max(0, int(self.TRAY_SHOW_DELAY_MS))
+        if delay_ms <= 0:
+            reveal()
+            return
+        try:
+            timer = threading.Timer(delay_ms / 1000.0, reveal)
+            timer.daemon = True
+            self._tray_show_timer = timer
+            timer.start()
+        except Exception:
+            reveal()
 
     def _show_main_window(self) -> None:
         if self.main_window is None:
@@ -3608,6 +3739,7 @@ class WordPackWebviewApp:
                 window = self.bubble_window
                 self.bubble_window = None
         elif kind == "tray":
+            self._cancel_tray_show_timer()
             if self.tray_window is not None:
                 try:
                     self.tray_window.hide()

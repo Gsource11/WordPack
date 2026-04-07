@@ -140,6 +140,9 @@
   let tooltipEl = null;
   let tooltipTarget = null;
   let trayHoverUnlockCleanup = null;
+  const TRAY_BLUR_GUARD_MS = 260;
+  let trayBlurGuardMs = TRAY_BLUR_GUARD_MS;
+  let trayOpenedAtMs = 0;
 
   const choiceGroupMarkup = (field, currentValue, options) => `
     <div class="choice-group">
@@ -2682,6 +2685,13 @@
           setTheme(payload.themeMode);
         }
         break;
+      case "tray-opening":
+        trayOpenedAtMs = Date.now();
+        {
+          const guard = Number(payload.guardMs || 0);
+          trayBlurGuardMs = Number.isFinite(guard) && guard > 0 ? Math.max(TRAY_BLUR_GUARD_MS, guard) : TRAY_BLUR_GUARD_MS;
+        }
+        break;
       case "dictionary-models-updated":
         if (payload.config) state.config = payload.config;
         if (payload.settings) state.settings = payload.settings;
@@ -2926,6 +2936,9 @@
   });
   window.addEventListener("blur", () => {
     if (state.view === "tray") {
+      if ((Date.now() - Number(trayOpenedAtMs || 0)) <= Number(trayBlurGuardMs || TRAY_BLUR_GUARD_MS)) {
+        return;
+      }
       const active = document.activeElement;
       if (active instanceof HTMLElement) {
         try {
