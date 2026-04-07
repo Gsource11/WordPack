@@ -38,6 +38,7 @@ english.WebView2AutoOption=Automatically download and install WebView2 now (Reco
 english.WebView2ManualOption=Skip for now and install WebView2 manually later
 english.WebView2ManualLink=Manual download link:%n%1
 english.WebView2ManualChoiceMsg=You chose manual install. WordPack may not start until WebView2 is installed.%n%nDownload link:%n%1
+english.WebView2InstallingMsg=Installing WebView2 Runtime silently. This may take up to 2 minutes...
 english.WebView2InstallFailedMsg=WebView2 installation did not complete.%n%nYou can continue and install WebView2 later from:%n%1
 english.WebView2MissingAfterInstallMsg=WebView2 Runtime is still missing. WordPack may not start correctly yet.%n%nPlease install WebView2 Runtime from:%n%1
 english.CreateDesktopIcon=Create a &desktop shortcut
@@ -49,6 +50,7 @@ chinesesimplified.WebView2AutoOption=立即自动下载安装 WebView2（推荐�
 chinesesimplified.WebView2ManualOption=暂时跳过，稍后手动安装 WebView2
 chinesesimplified.WebView2ManualLink=手动下载地址：%n%1
 chinesesimplified.WebView2ManualChoiceMsg=你选择了稍后手动安装。在安装 WebView2 之前，WordPack 可能无法启动。%n%n下载地址：%n%1
+chinesesimplified.WebView2InstallingMsg=正在静默安装 WebView2 Runtime，最多可能需要 2 分钟，请稍候...
 chinesesimplified.WebView2InstallFailedMsg=WebView2 安装未完成。%n%n你可以先继续安装，然后稍后从以下地址安装 WebView2：%n%1
 chinesesimplified.WebView2MissingAfterInstallMsg=系统仍缺少 WebView2 Runtime，WordPack 可能暂时无法正常启动。%n%n请从以下地址安装 WebView2：%n%1
 chinesesimplified.CreateDesktopIcon=创建桌面快捷方式(&D)
@@ -82,27 +84,58 @@ var
   WebView2NeedInstall: Boolean;
   WebView2OptionAuto: TNewRadioButton;
   WebView2OptionManual: TNewRadioButton;
+  WebView2StatusText: TNewStaticText;
 
 function HasWebView2Runtime(): Boolean;
 var
   VersionValue: String;
 begin
   Result := False;
-  if RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') then
+  if RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') and (Trim(VersionValue) <> '0.0.0.0') then
   begin
     Result := True;
     exit;
   end;
-  if RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') then
+  if RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') and (Trim(VersionValue) <> '0.0.0.0') then
   begin
     Result := True;
     exit;
   end;
-  if IsWin64() and RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') then
+  if IsWin64() and RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', VersionValue) and (Trim(VersionValue) <> '') and (Trim(VersionValue) <> '0.0.0.0') then
   begin
     Result := True;
     exit;
   end;
+end;
+
+function WaitForWebView2Runtime(TimeoutSeconds: Integer): Boolean;
+var
+  Attempt: Integer;
+  Attempts: Integer;
+begin
+  if HasWebView2Runtime() then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if TimeoutSeconds < 1 then
+    TimeoutSeconds := 1;
+
+  Attempts := (TimeoutSeconds * 1000) div 500;
+  if Attempts < 1 then
+    Attempts := 1;
+  for Attempt := 1 to Attempts do
+  begin
+    if HasWebView2Runtime() then
+    begin
+      Result := True;
+      exit;
+    end;
+    Sleep(500);
+  end;
+
+  Result := HasWebView2Runtime();
 end;
 
 function TryInstallWebView2OnlineInteractive(): Boolean;
@@ -126,18 +159,17 @@ begin
     '$url = ''' + WebView2BootstrapperUrl + ''''#13#10 +
     '$out = Join-Path $env:TEMP ''MicrosoftEdgeWebView2Setup.exe'''#13#10 +
     'Invoke-WebRequest -Uri $url -OutFile $out'#13#10 +
-    '& $out /install'#13#10 +
+    '& $out /silent /install'#13#10 +
     'exit $LASTEXITCODE'#13#10;
   SaveStringToFile(PsPath, PsScript, False);
 
-  Result := False;
-  if not Exec(PsExe, '-NoProfile -ExecutionPolicy Bypass -File "' + PsPath + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  if not Exec(PsExe, '-NoProfile -ExecutionPolicy Bypass -File "' + PsPath + '"', '', SW_HIDE, ewNoWait, ResultCode) then
+  begin
+    Result := WaitForWebView2Runtime(120);
     exit;
+  end;
 
-  if ResultCode <> 0 then
-    exit;
-
-  Result := HasWebView2Runtime();
+  Result := WaitForWebView2Runtime(120);
 end;
 
 procedure InitializeWizard();
@@ -188,6 +220,16 @@ begin
       AutoSize := False;
       WordWrap := True;
     end;
+
+    WebView2StatusText := TNewStaticText.Create(WizardForm);
+    WebView2StatusText.Parent := WebView2Page.Surface;
+    WebView2StatusText.Left := ScaleX(0);
+    WebView2StatusText.Top := ScaleY(226);
+    WebView2StatusText.Width := WebView2Page.SurfaceWidth;
+    WebView2StatusText.Height := ScaleY(28);
+    WebView2StatusText.Caption := '';
+    WebView2StatusText.AutoSize := False;
+    WebView2StatusText.WordWrap := True;
   end;
 end;
 
@@ -213,6 +255,12 @@ begin
       exit;
     end;
 
+    if Assigned(WebView2StatusText) then
+    begin
+      WebView2StatusText.Caption := CustomMessage('WebView2InstallingMsg');
+      WebView2StatusText.Repaint();
+    end;
+
     if not TryInstallWebView2OnlineInteractive() and not HasWebView2Runtime() then
     begin
       MsgBox(
@@ -221,6 +269,9 @@ begin
         MB_OK
       );
     end;
+
+    if Assigned(WebView2StatusText) then
+      WebView2StatusText.Caption := '';
   end;
 end;
 
