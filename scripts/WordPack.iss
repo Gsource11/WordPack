@@ -82,9 +82,9 @@ const
 var
   WebView2Page: TWizardPage;
   WebView2NeedInstall: Boolean;
+  WebView2AutoInstallSelected: Boolean;
   WebView2OptionAuto: TNewRadioButton;
   WebView2OptionManual: TNewRadioButton;
-  WebView2StatusText: TNewStaticText;
 
 function HasWebView2Runtime(): Boolean;
 var
@@ -175,6 +175,7 @@ end;
 procedure InitializeWizard();
 begin
   WebView2NeedInstall := not HasWebView2Runtime();
+  WebView2AutoInstallSelected := True;
   if WebView2NeedInstall then
   begin
     WebView2Page := CreateCustomPage(
@@ -220,16 +221,6 @@ begin
       AutoSize := False;
       WordWrap := True;
     end;
-
-    WebView2StatusText := TNewStaticText.Create(WizardForm);
-    WebView2StatusText.Parent := WebView2Page.Surface;
-    WebView2StatusText.Left := ScaleX(0);
-    WebView2StatusText.Top := ScaleY(226);
-    WebView2StatusText.Width := WebView2Page.SurfaceWidth;
-    WebView2StatusText.Height := ScaleY(28);
-    WebView2StatusText.Caption := '';
-    WebView2StatusText.AutoSize := False;
-    WebView2StatusText.WordWrap := True;
   end;
 end;
 
@@ -247,6 +238,7 @@ begin
   begin
     if Assigned(WebView2OptionManual) and WebView2OptionManual.Checked then
     begin
+      WebView2AutoInstallSelected := False;
       MsgBox(
         FmtMessage(CustomMessage('WebView2ManualChoiceMsg'), [WebView2DownloadPage]),
         mbInformation,
@@ -254,35 +246,29 @@ begin
       );
       exit;
     end;
-
-    if Assigned(WebView2StatusText) then
-    begin
-      WebView2StatusText.Caption := CustomMessage('WebView2InstallingMsg');
-      WebView2StatusText.Repaint();
-    end;
-
-    if not TryInstallWebView2OnlineInteractive() and not HasWebView2Runtime() then
-    begin
-      MsgBox(
-        FmtMessage(CustomMessage('WebView2InstallFailedMsg'), [WebView2DownloadPage]),
-        mbInformation,
-        MB_OK
-      );
-    end;
-
-    if Assigned(WebView2StatusText) then
-      WebView2StatusText.Caption := '';
+    WebView2AutoInstallSelected := True;
   end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
+  PreviousStatusText: String;
 begin
   if CurStep = ssInstall then
   begin
     { Stop running instance only after user clicked Install. }
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "{#MyAppExeName}" /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+    if WebView2NeedInstall and WebView2AutoInstallSelected and (not HasWebView2Runtime()) then
+    begin
+      PreviousStatusText := WizardForm.StatusLabel.Caption;
+      WizardForm.StatusLabel.Caption := CustomMessage('WebView2InstallingMsg');
+      WizardForm.StatusLabel.Repaint();
+      TryInstallWebView2OnlineInteractive();
+      WizardForm.StatusLabel.Caption := PreviousStatusText;
+      WizardForm.StatusLabel.Repaint();
+    end;
   end;
 
   if CurStep = ssPostInstall then
