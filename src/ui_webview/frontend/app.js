@@ -1400,6 +1400,8 @@
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "double_ctrl";
     const screenshotEnabled = draft.interaction?.screenshot_enabled !== false;
     const screenshotHotkey = draft.interaction?.screenshot_hotkey ?? "";
+    const bubbleCloseOnFastMouseLeave = draft.interaction?.bubble_close_on_fast_mouse_leave === true;
+    const bubbleCloseOnClickOutside = draft.interaction?.bubble_close_on_click_outside === true;
     const directionOptions = Array.from(new Set([
       "auto",
       ...(settings.dictionaryModels || []).map((item) => item.direction).filter(Boolean),
@@ -1704,6 +1706,12 @@
                   <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
                 </div>
               ` : ""}
+              <div class="field">
+                <label class="toggle-row"><input type="checkbox" data-field="interaction.bubble_close_on_fast_mouse_leave" ${bubbleCloseOnFastMouseLeave ? "checked" : ""}/>鼠标快速移开即关闭气泡（未固定时）</label>
+              </div>
+              <div class="field">
+                <label class="toggle-row"><input type="checkbox" data-field="interaction.bubble_close_on_click_outside" ${bubbleCloseOnClickOutside ? "checked" : ""}/>点击气泡外区域关闭（未固定时）</label>
+              </div>
             </section>
           </div>
         </div>

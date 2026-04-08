@@ -2501,6 +2501,12 @@ class WordPackWebviewApp:
 
         screenshot_enabled = bool(interaction.get("screenshot_enabled", self.config.interaction.screenshot_enabled))
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
+        bubble_close_on_fast_mouse_leave = bool(
+            interaction.get("bubble_close_on_fast_mouse_leave", self.config.interaction.bubble_close_on_fast_mouse_leave)
+        )
+        bubble_close_on_click_outside = bool(
+            interaction.get("bubble_close_on_click_outside", self.config.interaction.bubble_close_on_click_outside)
+        )
         history_cfg = payload.get("history", {}) if isinstance(payload, dict) else {}
         try:
             retention_days = int(history_cfg.get("retention_days", self.config.history.retention_days))
@@ -2512,6 +2518,8 @@ class WordPackWebviewApp:
         self.config.interaction.selection_icon_trigger = icon_trigger
         self.config.interaction.screenshot_enabled = screenshot_enabled
         self.config.interaction.screenshot_hotkey = screenshot_hotkey
+        self.config.interaction.bubble_close_on_fast_mouse_leave = bubble_close_on_fast_mouse_leave
+        self.config.interaction.bubble_close_on_click_outside = bubble_close_on_click_outside
         self.config.interaction.selection_icon_delay_ms = max(0, min(5000, icon_delay_ms))
         self.config.interaction.selection_drag_min_px = max(3, min(40, drag_min_px))
         self.config.interaction.selection_click_pair_max_distance_px = max(4, min(40, click_pair_max_distance_px))
@@ -3101,8 +3109,6 @@ class WordPackWebviewApp:
             self.set_status("已固定悬浮窗")
         else:
             self.set_status("已取消固定悬浮窗")
-            if not self._bubble_state.pending:
-                self._schedule_bubble_auto_hide()
 
         self._emit_bubble_updated()
         return {"ok": True, "bubble": payload}
@@ -3156,10 +3162,11 @@ class WordPackWebviewApp:
         return {"ok": True}
 
     def _schedule_bubble_auto_hide(self, delay_sec: float = 4.2) -> None:
+        # Bubble auto-hide timer is intentionally disabled now.
+        # Bubble close behavior is governed by explicit settings and manual close.
+        del delay_sec
         self._cancel_bubble_hide_timer()
-        self._bubble_hide_timer = threading.Timer(delay_sec, self._auto_close_bubble_if_allowed)
-        self._bubble_hide_timer.daemon = True
-        self._bubble_hide_timer.start()
+        return
 
     def _cancel_bubble_hide_timer(self) -> None:
         if self._bubble_hide_timer is not None:
@@ -3944,6 +3951,21 @@ class WordPackWebviewApp:
         cursor_x, cursor_y = get_cursor_position()
         return left <= cursor_x <= right and top <= cursor_y <= bottom
 
+    def _bubble_close_on_fast_mouse_leave_enabled(self) -> bool:
+        return bool(getattr(self.config.interaction, "bubble_close_on_fast_mouse_leave", False))
+
+    def _bubble_close_on_click_outside_enabled(self) -> bool:
+        return bool(getattr(self.config.interaction, "bubble_close_on_click_outside", False))
+
+    def _maybe_close_bubble_by_outside_click(self, cursor_pos: tuple[int, int]) -> None:
+        if not self._bubble_close_on_click_outside_enabled():
+            return
+        with self.lock:
+            if self.bubble_window is None or self._bubble_state.pinned:
+                return
+        if self._cursor_distance_to_bubble(cursor_pos) > 0:
+            self.close_window("bubble")
+
     def _cursor_distance_to_bubble(self, cursor_pos: tuple[int, int]) -> int:
         with self.lock:
             window = self.bubble_window
@@ -4028,6 +4050,8 @@ class WordPackWebviewApp:
         threading.Thread(target=self.trigger_selection_translate, daemon=True).start()
 
     def _maybe_hide_bubble_by_cursor(self, cursor_pos: tuple[int, int], cursor_step: int, cursor_dt: float) -> None:
+        if not self._bubble_close_on_fast_mouse_leave_enabled():
+            return
         with self.lock:
             if self.bubble_window is None or self._bubble_state.pinned:
                 return
@@ -4083,17 +4107,9 @@ class WordPackWebviewApp:
         return False
 
     def _auto_close_bubble_if_allowed(self) -> None:
-        with self.lock:
-            if self.bubble_window is None or self._bubble_state.pinned:
-                self._bubble_hide_timer = None
-                return
-
-        if self._is_cursor_inside_bubble():
-            self._schedule_bubble_auto_hide(0.35)
-            return
-
+        # Bubble auto-hide timer is intentionally disabled now.
         self._bubble_hide_timer = None
-        self.close_window("bubble")
+        return
 
     def _poll_input_loop(self) -> None:
         from ctypes import Structure, byref, windll
@@ -4147,6 +4163,8 @@ class WordPackWebviewApp:
                         screenshot_active = False
 
                 if not self._fb_last_lbtn_down and lbtn_down:
+                    if not screenshot_guard:
+                        self._maybe_close_bubble_by_outside_click(current_cursor)
                     self._fb_lbtn_down_pos = (cursor_x, cursor_y)
                     self._fb_lbtn_down_at = now
 

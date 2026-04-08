@@ -36,6 +36,8 @@ class InteractionConfig:
     selection_icon_trigger: str = "click"  # click | hover
     screenshot_enabled: bool = True
     screenshot_hotkey: str = "Ctrl+Alt+S"
+    bubble_close_on_fast_mouse_leave: bool = False
+    bubble_close_on_click_outside: bool = False
     selection_icon_delay_ms: int = 1500
     selection_drag_min_px: int = 9
     selection_click_pair_max_distance_px: int = 14
@@ -161,6 +163,10 @@ class ConfigStore:
                     )
                     or ""
                 ).strip(),
+                bubble_close_on_fast_mouse_leave=bool(
+                    interaction_raw.get("bubble_close_on_fast_mouse_leave", False)
+                ),
+                bubble_close_on_click_outside=bool(interaction_raw.get("bubble_close_on_click_outside", False)),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
                 selection_drag_min_px=int(interaction_raw.get("selection_drag_min_px", 9) or 9),
                 selection_click_pair_max_distance_px=int(interaction_raw.get("selection_click_pair_max_distance_px", 14) or 14),
@@ -188,6 +194,8 @@ class ConfigStore:
         if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
             cfg.interaction.selection_trigger_mode = "double_ctrl"
         cfg.interaction.startup_launch_enabled = bool(cfg.interaction.startup_launch_enabled)
+        cfg.interaction.bubble_close_on_fast_mouse_leave = bool(cfg.interaction.bubble_close_on_fast_mouse_leave)
+        cfg.interaction.bubble_close_on_click_outside = bool(cfg.interaction.bubble_close_on_click_outside)
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
