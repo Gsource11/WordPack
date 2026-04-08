@@ -3444,6 +3444,21 @@ class WordPackWebviewApp:
             return {"ok": False, "message": message}
 
         assert candidate is not None
+        # For non-icon trigger modes (double Ctrl/Alt/Shift), bubble should
+        # open near the latest cursor position at trigger time.
+        if str(candidate.trigger_mode or "icon") != "icon":
+            cursor_x, cursor_y = get_cursor_position()
+            payload = dict(candidate.payload or {})
+            payload["x"] = int(cursor_x)
+            payload["y"] = int(cursor_y)
+            payload["down_x"] = int(cursor_x)
+            payload["down_y"] = int(cursor_y)
+            payload["up_ts"] = float(time.time())
+            candidate.payload = payload
+            with self.lock:
+                if self._selection_candidate is not None:
+                    self._selection_candidate.payload = dict(payload)
+
         text = candidate.text.strip() or self._capture_selected_text(candidate.payload).strip()
         if not text:
             message = "未识别到可翻译文本，请重新划词后再试"
