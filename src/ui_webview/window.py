@@ -2960,6 +2960,7 @@ class WordPackWebviewApp:
         preserve_candidates: bool = False,
         refresh_auto_hide: bool = True,
     ) -> None:
+        del refresh_auto_hide
         width = self.BUBBLE_WIDTH
         height = self._estimate_bubble_height(source_text, result_text)
         with self.lock:
@@ -3010,8 +3011,14 @@ class WordPackWebviewApp:
             )
         else:
             try:
-                self.bubble_window.resize(width, height)
-                self.bubble_window.move(x, y)
+                # During streaming updates we preserve geometry and only need
+                # to push data to frontend; repeated native move/resize/show
+                # calls can cause visible drag jank.
+                if preserve_position and preserve_height:
+                    pass
+                else:
+                    self.bubble_window.resize(width, height)
+                    self.bubble_window.move(x, y)
                 self.bubble_window.show()
             except Exception:
                 self.logger.exception("Failed to update bubble window geometry")
@@ -4049,8 +4056,22 @@ class WordPackWebviewApp:
         self._selection_hover_entered_at = 0.0
         threading.Thread(target=self.trigger_selection_translate, daemon=True).start()
 
-    def _maybe_hide_bubble_by_cursor(self, cursor_pos: tuple[int, int], cursor_step: int, cursor_dt: float) -> None:
+    def _maybe_hide_bubble_by_cursor(
+        self,
+        cursor_pos: tuple[int, int],
+        cursor_step: int,
+        cursor_dt: float,
+        *,
+        lbtn_down: bool,
+    ) -> None:
         if not self._bubble_close_on_fast_mouse_leave_enabled():
+            return
+        # Dragging bubble (left button pressed) should never be treated as
+        # "quick mouse leave", otherwise window-drag can close the bubble.
+        if lbtn_down:
+            return
+        # Skip a short cooldown right after any window interaction (e.g. drag start).
+        if (time.time() - float(self._last_window_interaction_at or 0.0)) <= 0.65 and self._is_our_window_foreground():
             return
         with self.lock:
             if self.bubble_window is None or self._bubble_state.pinned:
@@ -4276,7 +4297,12 @@ class WordPackWebviewApp:
                 if not screenshot_guard:
                     self._maybe_trigger_selection_icon_hover(current_cursor)
                     self._maybe_hide_selection_icon_by_cursor(current_cursor)
-                self._maybe_hide_bubble_by_cursor(current_cursor, cursor_step, cursor_dt)
+                self._maybe_hide_bubble_by_cursor(
+                    current_cursor,
+                    cursor_step,
+                    cursor_dt,
+                    lbtn_down=lbtn_down,
+                )
 
                 self._fb_last_lbtn_down = lbtn_down
                 self._fb_last_rbtn_down = rbtn_down
