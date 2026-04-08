@@ -2693,25 +2693,8 @@ class WordPackWebviewApp:
             self._suppress_selection_events(1.0)
 
             main_hidden_before = bool(self.hidden) or (not self._is_main_window_visible())
-            main_hidden_for_capture = False
-            # Only hide main when it is actually foreground; otherwise keep current
-            # taskbar/window state untouched to avoid side effects.
-            if (not main_hidden_before) and self.main_window is not None and self._is_our_window_foreground():
-                try:
-                    self._run_on_window_ui(
-                        self.main_window,
-                        lambda: self.main_window.hide(),
-                        wait=True,
-                        timeout_sec=1.2,
-                        log_prefix="start_screenshot_capture.hide_main",
-                    )
-                    main_hidden_for_capture = True
-                except Exception:
-                    self.logger.exception("Failed to hide main window before screenshot capture")
-            if main_hidden_for_capture:
-                self.hidden = True
-            else:
-                self.hidden = bool(main_hidden_before)
+            # Keep main window untouched during screenshot flow.
+            self.hidden = bool(main_hidden_before)
             # Let the compositor settle so we don't capture stale frames from previous sessions.
             self._flush_dwm()
             time.sleep(0.022)
