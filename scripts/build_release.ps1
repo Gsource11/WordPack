@@ -1,6 +1,7 @@
 ﻿param(
     [switch]$Clean,
-    [switch]$InstallerOnly
+    [switch]$InstallerOnly,
+    [switch]$WithOfflineInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -100,5 +101,28 @@ if (-not $iscc) {
 }
 
 & $iscc "scripts\WordPack.iss"
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup failed for online installer."
+}
+
+if ($WithOfflineInstaller) {
+    $webview2StandaloneInstaller = Join-Path $ProjectRoot "webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+    $argosModelDir = Join-Path $ProjectRoot "argosmodel"
+    if (!(Test-Path $webview2StandaloneInstaller)) {
+        throw "Offline installer requires $webview2StandaloneInstaller"
+    }
+    if (!(Test-Path $argosModelDir)) {
+        throw "Offline installer requires $argosModelDir"
+    }
+    & $iscc "/DOFFLINE=1" "scripts\WordPack.iss"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup failed for offline installer."
+    }
+}
+
 Write-Host "Build done. App dir: dist/WordPack" -ForegroundColor Green
 Write-Host "Installer: dist/installer/WordPack-Setup.exe" -ForegroundColor Green
+if ($WithOfflineInstaller) {
+    Write-Host "Installer: dist/installer/WordPack-Offline-Setup.exe" -ForegroundColor Green
+}
+

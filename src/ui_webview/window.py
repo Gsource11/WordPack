@@ -1002,6 +1002,109 @@ class WordPackWebviewApp:
             self.mouse_hooks.start()
         except Exception:
             self.logger.exception("Failed to start global hook services")
+        self._start_bundled_model_import()
+
+    def _bundled_argos_model_manifest_path(self) -> Path:
+        return self.data_dir / "bundled_argos_models_manifest.json"
+
+    def _load_bundled_argos_model_manifest(self) -> dict[str, str]:
+        path = self._bundled_argos_model_manifest_path()
+        try:
+            if not path.exists():
+                return {}
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return {}
+            result: dict[str, str] = {}
+            for k, v in raw.items():
+                key = str(k or "").strip()
+                val = str(v or "").strip()
+                if key and val:
+                    result[key] = val
+            return result
+        except Exception:
+            return {}
+
+    def _save_bundled_argos_model_manifest(self, payload: dict[str, str]) -> None:
+        path = self._bundled_argos_model_manifest_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            self.logger.exception("Failed to persist bundled argos model manifest")
+
+    def _bundled_argos_model_dirs(self) -> list[Path]:
+        candidates: list[Path] = []
+        if getattr(sys, "frozen", False):
+            try:
+                candidates.append(Path(sys.executable).resolve().parent / "argosmodel")
+            except Exception:
+                pass
+        candidates.append(self.base_dir / "argosmodel")
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for item in candidates:
+            try:
+                resolved = item.resolve()
+            except Exception:
+                resolved = item
+            key = str(resolved).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if resolved.exists() and resolved.is_dir():
+                unique.append(resolved)
+        return unique
+
+    def _start_bundled_model_import(self) -> None:
+        def worker() -> None:
+            try:
+                model_files: list[Path] = []
+                for root in self._bundled_argos_model_dirs():
+                    try:
+                        model_files.extend(sorted(root.glob("*.argosmodel")))
+                    except Exception:
+                        continue
+                if not model_files:
+                    return
+
+                old_manifest = self._load_bundled_argos_model_manifest()
+                new_manifest: dict[str, str] = {}
+                to_import: list[Path] = []
+
+                for path in model_files:
+                    try:
+                        stat = path.stat()
+                        stamp = f"{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+                    except Exception:
+                        continue
+                    key = str(path.resolve()).lower()
+                    new_manifest[key] = stamp
+                    if old_manifest.get(key) != stamp:
+                        to_import.append(path)
+
+                if not to_import:
+                    return
+
+                imported = 0
+                for path in to_import:
+                    try:
+                        self.service.import_dictionary_model(str(path))
+                        imported += 1
+                    except Exception:
+                        self.logger.exception("Failed to import bundled argos model: %s", path)
+
+                self._save_bundled_argos_model_manifest(new_manifest)
+
+                if imported > 0:
+                    self.service.dictionary_status(probe=True, force_refresh=True)
+                    payload = self._config_event_payload()
+                    self.bridge.send("main", "dictionary-models-updated", payload)
+                    self.set_status(f"已导入预置词典模型 {imported} 个")
+            except Exception:
+                self.logger.exception("Bundled argos model import worker failed")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ai_status_cache_path(self) -> Path:
         return self.data_dir / "ai_status_cache.json"

@@ -3,6 +3,22 @@
 #define MyAppPublisher "WordPack"
 #define MyAppExeName "WordPack.exe"
 
+#ifndef OFFLINE
+  #define OFFLINE 0
+#endif
+#if OFFLINE
+  #define InstallerName "WordPack-Offline-Setup"
+#else
+  #define InstallerName "WordPack-Setup"
+#endif
+
+#if OFFLINE
+  #ifexist "..\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+  #else
+    #error "Offline build requires ..\\webview2\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe (standalone offline installer)"
+  #endif
+#endif
+
 [Setup]
 AppId={{A8A3F9BE-DF74-40B2-9A96-3D9BDB7F9C61}
 AppName={#MyAppName}
@@ -12,7 +28,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist\installer
-OutputBaseFilename=WordPack-Setup
+OutputBaseFilename={#InstallerName}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -62,6 +78,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\WordPack\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion createallsubdirs
+#if OFFLINE
+Source: "..\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; DestName: "WebView2RuntimeOfflineInstaller.exe"; Flags: dontcopy
+Source: "..\argosmodel\*"; DestDir: "{app}\argosmodel"; Flags: recursesubdirs ignoreversion createallsubdirs
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -173,10 +193,47 @@ begin
   Result := WaitForWebView2Runtime(120);
 end;
 
+function TryInstallWebView2FromBundled(): Boolean;
+var
+  InstallerPath: String;
+  ResultCode: Integer;
+begin
+  if HasWebView2Runtime() then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  try
+    ExtractTemporaryFile('WebView2RuntimeOfflineInstaller.exe');
+  except
+    Result := False;
+    exit;
+  end;
+
+  InstallerPath := ExpandConstant('{tmp}\WebView2RuntimeOfflineInstaller.exe');
+  if not FileExists(InstallerPath) then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  if not Exec(InstallerPath, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := WaitForWebView2Runtime(180);
+    exit;
+  end;
+
+  Result := WaitForWebView2Runtime(180);
+end;
+
 procedure InitializeWizard();
 begin
   WebView2NeedInstall := not HasWebView2Runtime();
   WebView2AutoInstallSelected := True;
+#if OFFLINE
+  exit;
+#endif
   if WebView2NeedInstall then
   begin
     WebView2Page := CreateCustomPage(
@@ -235,6 +292,9 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
+#if OFFLINE
+  exit;
+#endif
   if WebView2NeedInstall and Assigned(WebView2Page) and (CurPageID = WebView2Page.ID) then
   begin
     if Assigned(WebView2OptionManual) and WebView2OptionManual.Checked then
@@ -266,7 +326,11 @@ begin
       PreviousStatusText := WizardForm.StatusLabel.Caption;
       WizardForm.StatusLabel.Caption := CustomMessage('WebView2InstallingMsg');
       WizardForm.StatusLabel.Repaint();
+#if OFFLINE
+      TryInstallWebView2FromBundled();
+#else
       TryInstallWebView2OnlineInteractive();
+#endif
       WizardForm.StatusLabel.Caption := PreviousStatusText;
       WizardForm.StatusLabel.Repaint();
     end;
