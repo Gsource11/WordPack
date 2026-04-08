@@ -24,7 +24,7 @@ class DictionaryConfig:
 @dataclass
 class SelectionAppProfile:
     executable: str = ""
-    mode: str = "inherit"  # inherit | icon | double_ctrl | disabled
+    mode: str = "inherit"  # inherit | icon | double_ctrl | double_alt | double_shift | disabled
     icon_trigger: str = "inherit"  # inherit | click | hover
 
 
@@ -32,7 +32,7 @@ class SelectionAppProfile:
 class InteractionConfig:
     startup_launch_enabled: bool = False
     selection_enabled: bool = True
-    selection_trigger_mode: str = "icon"  # icon | double_ctrl
+    selection_trigger_mode: str = "double_ctrl"  # icon | double_ctrl | double_alt | double_shift
     selection_icon_trigger: str = "click"  # click | hover
     screenshot_enabled: bool = True
     screenshot_hotkey: str = "Ctrl+Alt+S"
@@ -96,7 +96,7 @@ class ConfigStore:
         icon_trigger = str(item.get("icon_trigger", "inherit") or "inherit").strip().lower()
         if not executable:
             return None
-        if mode not in {"inherit", "icon", "double_ctrl", "disabled"}:
+        if mode not in {"inherit", "icon", "double_ctrl", "double_alt", "double_shift", "disabled"}:
             mode = "inherit"
         if icon_trigger not in {"inherit", "click", "hover"}:
             icon_trigger = "inherit"
@@ -151,7 +151,7 @@ class ConfigStore:
             interaction=InteractionConfig(
                 startup_launch_enabled=bool(interaction_raw.get("startup_launch_enabled", legacy_startup_enabled)),
                 selection_enabled=bool(interaction_raw.get("selection_enabled", legacy_selection_enabled)),
-                selection_trigger_mode=str(interaction_raw.get("selection_trigger_mode", "icon") or "icon"),
+                selection_trigger_mode=str(interaction_raw.get("selection_trigger_mode", "double_ctrl") or "double_ctrl"),
                 selection_icon_trigger=str(interaction_raw.get("selection_icon_trigger", "click") or "click"),
                 screenshot_enabled=bool(interaction_raw.get("screenshot_enabled", legacy_screenshot_enabled)),
                 screenshot_hotkey=str(
@@ -185,8 +185,8 @@ class ConfigStore:
         if not cfg.dictionary.preferred_direction:
             cfg.dictionary.preferred_direction = "auto"
 
-        if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl"}:
-            cfg.interaction.selection_trigger_mode = "icon"
+        if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
+            cfg.interaction.selection_trigger_mode = "double_ctrl"
         cfg.interaction.startup_launch_enabled = bool(cfg.interaction.startup_launch_enabled)
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"

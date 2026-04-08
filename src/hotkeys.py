@@ -20,6 +20,10 @@ WM_KEYUP = 0x0101
 WM_SYSKEYUP = 0x0105
 VK_LCONTROL = 0xA2
 VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -128,6 +132,12 @@ class HotkeyManager:
         self._last_ctrl_at = 0.0
         self._ctrl_pressed: set[int] = set()
         self._ctrl_combo_used = False
+        self._last_alt_at = 0.0
+        self._alt_pressed: set[int] = set()
+        self._alt_combo_used = False
+        self._last_shift_at = 0.0
+        self._shift_pressed: set[int] = set()
+        self._shift_combo_used = False
         self._registered_hotkeys: list[int] = []
 
     def start(self) -> None:
@@ -195,6 +205,8 @@ class HotkeyManager:
             kb = cast(l_param, POINTER(KBDLLHOOKSTRUCT)).contents
             is_key_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
             is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
+            is_alt = kb.vkCode in (VK_LMENU, VK_RMENU)
+            is_shift = kb.vkCode in (VK_LSHIFT, VK_RSHIFT)
 
             if is_key_down and is_ctrl:
                 if not self._ctrl_pressed:
@@ -212,5 +224,39 @@ class HotkeyManager:
                             self.callback("double_ctrl_selection", None)
                         self._last_ctrl_at = now
                     self._ctrl_combo_used = False
+
+            if is_key_down and is_alt:
+                if not self._alt_pressed:
+                    self._alt_combo_used = False
+                self._alt_pressed.add(int(kb.vkCode))
+            elif is_key_down and not is_alt:
+                if self._alt_pressed:
+                    self._alt_combo_used = True
+            elif not is_key_down and is_alt:
+                self._alt_pressed.discard(int(kb.vkCode))
+                if not self._alt_pressed:
+                    if not self._alt_combo_used:
+                        now = time.time()
+                        if now - self._last_alt_at <= 0.35:
+                            self.callback("double_alt_selection", None)
+                        self._last_alt_at = now
+                    self._alt_combo_used = False
+
+            if is_key_down and is_shift:
+                if not self._shift_pressed:
+                    self._shift_combo_used = False
+                self._shift_pressed.add(int(kb.vkCode))
+            elif is_key_down and not is_shift:
+                if self._shift_pressed:
+                    self._shift_combo_used = True
+            elif not is_key_down and is_shift:
+                self._shift_pressed.discard(int(kb.vkCode))
+                if not self._shift_pressed:
+                    if not self._shift_combo_used:
+                        now = time.time()
+                        if now - self._last_shift_at <= 0.35:
+                            self.callback("double_shift_selection", None)
+                        self._last_shift_at = now
+                    self._shift_combo_used = False
 
         return user32.CallNextHookEx(self._keyboard_hook, n_code, w_param, l_param)

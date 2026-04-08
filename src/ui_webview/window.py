@@ -190,9 +190,15 @@ class WordPackWebviewApp:
         self._fb_last_lbtn_up_pos: tuple[int, int] | None = None
         self._fb_lbtn_click_count = 0
         self._fb_last_ctrl_down = False
+        self._fb_last_alt_down = False
+        self._fb_last_shift_down = False
         self._fb_ctrl_combo_used = False
+        self._fb_alt_combo_used = False
+        self._fb_shift_combo_used = False
         self._fb_last_escape_down = False
         self._fb_last_ctrl_tap_at = 0.0
+        self._fb_last_alt_tap_at = 0.0
+        self._fb_last_shift_tap_at = 0.0
         self._fb_last_combo_s = False
         self._last_selection_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
@@ -2420,9 +2426,11 @@ class WordPackWebviewApp:
         preferred_direction = str(dictionary.get("preferred_direction", self.config.dictionary.preferred_direction) or "auto").strip()
         self.config.dictionary.preferred_direction = preferred_direction or "auto"
 
-        trigger_mode = str(interaction.get("selection_trigger_mode", self.config.interaction.selection_trigger_mode) or "icon").strip()
-        if trigger_mode not in {"icon", "double_ctrl"}:
-            trigger_mode = "icon"
+        trigger_mode = str(
+            interaction.get("selection_trigger_mode", self.config.interaction.selection_trigger_mode) or "double_ctrl"
+        ).strip()
+        if trigger_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
+            trigger_mode = "double_ctrl"
 
         icon_trigger = str(interaction.get("selection_icon_trigger", self.config.interaction.selection_icon_trigger) or "click").strip()
         if icon_trigger not in {"click", "hover"}:
@@ -3221,9 +3229,9 @@ class WordPackWebviewApp:
             return raw
 
     def _resolve_selection_profile(self, executable: str | None = None) -> tuple[str, str, str]:
-        global_mode = str(self.config.interaction.selection_trigger_mode or "icon").strip().lower()
-        if global_mode not in {"icon", "double_ctrl"}:
-            global_mode = "icon"
+        global_mode = str(self.config.interaction.selection_trigger_mode or "double_ctrl").strip().lower()
+        if global_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
+            global_mode = "double_ctrl"
         global_icon_trigger = str(self.config.interaction.selection_icon_trigger or "click").strip().lower()
         if global_icon_trigger not in {"click", "hover"}:
             global_icon_trigger = "click"
@@ -3353,14 +3361,27 @@ class WordPackWebviewApp:
             fingerprint=fingerprint,
         )
 
-    def _can_trigger_double_ctrl_selection(self) -> bool:
+    @staticmethod
+    def _selection_trigger_mode_label(trigger_mode: str) -> str:
+        mode = str(trigger_mode or "").strip().lower()
+        mapping = {
+            "double_ctrl": "双击 Ctrl",
+            "double_alt": "双击 Alt",
+            "double_shift": "双击 Shift",
+        }
+        return mapping.get(mode, "双击 Ctrl")
+
+    def _can_trigger_selection_by_mode(self, trigger_mode: str) -> bool:
+        expected_mode = str(trigger_mode or "").strip().lower()
+        if expected_mode not in {"double_ctrl", "double_alt", "double_shift"}:
+            return False
         if not bool(self.config.interaction.selection_enabled):
             return False
         candidate = self._selection_candidate
         if self._is_selection_candidate_fresh(candidate):
-            return str(candidate.trigger_mode or "icon") == "double_ctrl"
+            return str(candidate.trigger_mode or "icon") == expected_mode
         mode, _icon_trigger, _exe = self._resolve_selection_profile()
-        return mode == "double_ctrl"
+        return mode == expected_mode
 
     def _ensure_selection_candidate_for_translate(self) -> SelectionCandidate | None:
         candidate = self._selection_candidate
@@ -3554,10 +3575,15 @@ class WordPackWebviewApp:
             self.set_status(str(payload))
             return
 
-        if event == "double_ctrl_selection":
+        if event in {"double_ctrl_selection", "double_alt_selection", "double_shift_selection"}:
             if self._screenshot_session is not None or self._selection_events_suppressed():
                 return
-            if self._can_trigger_double_ctrl_selection() and not self._is_our_window_foreground():
+            trigger_event_mode = {
+                "double_ctrl_selection": "double_ctrl",
+                "double_alt_selection": "double_alt",
+                "double_shift_selection": "double_shift",
+            }.get(str(event), "double_ctrl")
+            if self._can_trigger_selection_by_mode(trigger_event_mode) and not self._is_our_window_foreground():
                 self._translate_pending_selection()
             return
 
@@ -3596,7 +3622,7 @@ class WordPackWebviewApp:
             self.set_status("已捕获选区，正在确认文本")
             self._schedule_selection_icon()
         else:
-            self.set_status("已捕获选区，双击 Ctrl 触发翻译")
+            self.set_status(f"已捕获选区，{self._selection_trigger_mode_label(candidate.trigger_mode)} 触发翻译")
             self.close_window("icon")
 
     def _emit_selection_candidate(self, payload) -> None:
@@ -4164,10 +4190,36 @@ class WordPackWebviewApp:
 
                 if (not screenshot_guard) and self._fb_last_ctrl_down and not ctrl_down:
                     if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
-                        if self._can_trigger_double_ctrl_selection() and not self._is_our_window_foreground():
+                        if self._can_trigger_selection_by_mode("double_ctrl") and not self._is_our_window_foreground():
                             self._translate_pending_selection()
                     if not self._fb_ctrl_combo_used:
                         self._fb_last_ctrl_tap_at = now
+
+                if (not screenshot_guard) and alt_down and not self._fb_last_alt_down:
+                    self._fb_alt_combo_used = False
+
+                if (not screenshot_guard) and alt_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
+                    self._fb_alt_combo_used = True
+
+                if (not screenshot_guard) and self._fb_last_alt_down and not alt_down:
+                    if not self._fb_alt_combo_used and now - self._fb_last_alt_tap_at <= 0.35:
+                        if self._can_trigger_selection_by_mode("double_alt") and not self._is_our_window_foreground():
+                            self._translate_pending_selection()
+                    if not self._fb_alt_combo_used:
+                        self._fb_last_alt_tap_at = now
+
+                if (not screenshot_guard) and shift_down and not self._fb_last_shift_down:
+                    self._fb_shift_combo_used = False
+
+                if (not screenshot_guard) and shift_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
+                    self._fb_shift_combo_used = True
+
+                if (not screenshot_guard) and self._fb_last_shift_down and not shift_down:
+                    if not self._fb_shift_combo_used and now - self._fb_last_shift_tap_at <= 0.35:
+                        if self._can_trigger_selection_by_mode("double_shift") and not self._is_our_window_foreground():
+                            self._translate_pending_selection()
+                    if not self._fb_shift_combo_used:
+                        self._fb_last_shift_tap_at = now
 
                 combo_s = False
                 if (not screenshot_guard) and self.config.interaction.screenshot_enabled:
@@ -4196,6 +4248,8 @@ class WordPackWebviewApp:
                 self._fb_last_lbtn_down = lbtn_down
                 self._fb_last_rbtn_down = rbtn_down
                 self._fb_last_ctrl_down = ctrl_down
+                self._fb_last_alt_down = alt_down
+                self._fb_last_shift_down = shift_down
                 self._fb_last_escape_down = escape_down
             except Exception:
                 now = time.time()

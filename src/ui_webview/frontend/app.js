@@ -1397,7 +1397,7 @@
     const draft = state.settingsDraft || clone(state.config || {});
     const startupEnabled = draft.interaction?.startup_launch_enabled === true;
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
-    const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "icon";
+    const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "double_ctrl";
     const screenshotEnabled = draft.interaction?.screenshot_enabled !== false;
     const screenshotHotkey = draft.interaction?.screenshot_hotkey ?? "";
     const directionOptions = Array.from(new Set([
@@ -1407,6 +1407,8 @@
     const selectionModeOptions = [
       { value: "icon", label: "图标触发" },
       { value: "double_ctrl", label: "双击 Ctrl" },
+      { value: "double_alt", label: "双击 Alt" },
+      { value: "double_shift", label: "双击 Shift" },
     ];
     const iconTriggerOptions = [
       { value: "click", label: "点击" },
