@@ -12,6 +12,8 @@ build/
 .venv/
 .venv-release/
 tools/
+argosmodel/
+webview2/
 scripts/innosetup-*.exe
 .pytest_cache/
 .mypy_cache/
