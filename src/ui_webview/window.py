@@ -851,6 +851,14 @@ class WordPackWebviewApp:
             if not hwnd:
                 return
 
+            # Windows 10 and below: keep tray menu as square corners.
+            if not self._is_windows_11_or_newer():
+                try:
+                    ctypes.windll.user32.SetWindowRgn(hwnd, None, True)
+                except Exception:
+                    pass
+                return
+
             # Prefer DWM compositor rounded corners (anti-aliased) on
             # supported Windows versions. SetWindowRgn is a hard clip fallback.
             try:
@@ -1253,6 +1261,14 @@ class WordPackWebviewApp:
             return value or None
         except Exception:
             return None
+
+    @staticmethod
+    def _is_windows_11_or_newer() -> bool:
+        try:
+            version = sys.getwindowsversion()
+            return int(version.major) >= 10 and int(version.build) >= 22000
+        except Exception:
+            return False
 
     @staticmethod
     def _set_global_cursor_crosshair(enabled: bool) -> None:
@@ -3110,7 +3126,9 @@ class WordPackWebviewApp:
         bounds = get_virtual_screen_bounds()
         width = min(1180, max(820, bounds.width - 80))
         height = min(820, max(620, bounds.height - 80))
-        x, y = self._centered_position(width, height)
+        # Zoom panel should open at geometric center (no upward bias).
+        x = bounds.left + max(0, (bounds.width - width) // 2)
+        y = bounds.top + max(0, (bounds.height - height) // 2)
         self._apply_main_geometry(x, y, width, height)
         return {"ok": True}
 

@@ -123,6 +123,61 @@
     return window.pywebview.api[method](...args);
   };
 
+  const getMainResultTextFromDom = () => {
+    const el = document.getElementById("resultScroll");
+    return String(el?.textContent || "").trim();
+  };
+
+  const getBubbleResultTextFromDom = () => {
+    const el = document.querySelector(".bubble-result-scroll");
+    return String(el?.textContent || "").trim();
+  };
+
+  const copyTextWithFallback = async (value) => {
+    const text = String(value ?? "");
+    if (!text.trim()) {
+      showToast("warning", "没有可复制的内容");
+      return false;
+    }
+
+    const resp = await apiCall("copy_text", text);
+    if (resp && resp.ok) {
+      return true;
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        showToast("success", "已复制到剪贴板");
+        return true;
+      }
+    } catch (_err) {
+      // no-op
+    }
+
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "true");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) {
+        showToast("success", "已复制到剪贴板");
+        return true;
+      }
+    } catch (_err) {
+      // no-op
+    }
+
+    showToast("error", (resp && resp.message) ? String(resp.message) : "复制失败，请重试");
+    return false;
+  };
+
   const skeletonMarkup = (variant = "main") => `
     <div class="result-skeleton ${variant}">
       <span class="skeleton-line w-88"></span>
@@ -1324,6 +1379,7 @@
   function renderMain() {
     const mode = state.config?.translation_mode || "dictionary";
     const result = state.resultText || "";
+    const mainResultReady = Boolean(String(result || "").trim());
     const showResultCard = Boolean(state.pending || result);
     const mainResultClass = state.pending ? (result ? "pending-streaming" : "pending-waiting") : "";
     const mainResultContent = state.pending && !result ? skeletonMarkup("main") : escapeHtml(result);
@@ -1432,7 +1488,7 @@
             </div>
           </section>
           <div class="footer-actions">
-            <button class="ghost-button" data-action="copy-result" ${mainCopyAll ? 'title="复制全部候选译文" aria-label="复制全部候选译文"' : 'aria-label="复制"'}>${icons.copy}<span>复制</span></button>
+            <button class="ghost-button ${mainResultReady ? "" : "disabled"}" data-action="copy-result" ${mainResultReady ? (mainCopyAll ? 'title="复制全部候选译文" aria-label="复制全部候选译文"' : 'aria-label="复制"') : 'disabled aria-disabled="true" aria-label="复制"'}>${icons.copy}<span>复制</span></button>
             <button class="ghost-button" data-action="clear-all">${icons.trash}<span>清空</span></button>
           </div>
         </section>
@@ -1653,7 +1709,7 @@
       <section class="zoom-modal ${state.zoomOpen ? "open" : ""}">
         <div class="modal-backdrop" data-action="close-zoom"></div>
         <div class="modal-panel">
-          <div class="modal-header">
+          <div class="modal-header" data-drag-handle="zoom-header">
             <div class="modal-title">放大查看</div>
             <button class="icon-button" data-action="close-zoom">${icons.close}</button>
           </div>
@@ -1862,14 +1918,24 @@
       }
     }
     const footerCopy = document.querySelector('.footer-actions [data-action="copy-result"]');
-    if (footerCopy) {
-      const hint = mainCopyAll ? "复制全部候选译文" : "";
-      if (hint) {
-        footerCopy.title = hint;
-        footerCopy.setAttribute("aria-label", hint);
+    const mainResultReady = Boolean(String(state.resultText || "").trim());
+    if (footerCopy instanceof HTMLButtonElement) {
+      footerCopy.disabled = !mainResultReady;
+      footerCopy.classList.toggle("disabled", !mainResultReady);
+      footerCopy.setAttribute("aria-disabled", mainResultReady ? "false" : "true");
+      if (mainResultReady) {
+        const hint = mainCopyAll ? "复制全部候选译文" : "";
+        if (hint) {
+          footerCopy.title = hint;
+          footerCopy.setAttribute("aria-label", hint);
+        } else {
+          footerCopy.removeAttribute("title");
+          footerCopy.setAttribute("aria-label", "复制");
+        }
       } else {
         footerCopy.removeAttribute("title");
         footerCopy.setAttribute("aria-label", "复制");
+        delete footerCopy.dataset.tooltip;
       }
     }
 
@@ -2307,14 +2373,14 @@
         const index = Number(actionTarget.dataset.index || "-1");
         const items = getMainDisplayedCandidates();
         if (index < 0 || index >= items.length) break;
-        await apiCall("copy_text", items[index] || "");
+        await copyTextWithFallback(items[index] || "");
         break;
       }
       case "copy-candidate-bubble": {
         const index = Number(actionTarget.dataset.index || "-1");
         const items = getBubbleDisplayedCandidates();
         if (index < 0 || index >= items.length) break;
-        await apiCall("copy_text", items[index] || "");
+        await copyTextWithFallback(items[index] || "");
         break;
       }
       case "copy-result":
@@ -2322,17 +2388,19 @@
           const bubbleItems = getBubbleDisplayedCandidates();
           const bubbleCandidateOpen = Boolean(state.bubble?.candidate_pending || (state.bubble?.candidate_items || []).length);
           if (bubbleCandidateOpen && bubbleItems.length > 0) {
-            await apiCall("copy_text", formatAllCandidates(bubbleItems));
+            await copyTextWithFallback(formatAllCandidates(bubbleItems));
           } else {
-            await apiCall("copy_text", state.bubble?.result_text || "");
+            const bubbleText = String(state.bubble?.result_text || getBubbleResultTextFromDom() || "");
+            await copyTextWithFallback(bubbleText);
           }
         } else {
           const mainItems = getMainDisplayedCandidates();
           const mainCandidateOpen = Boolean(state.candidatePending || (state.candidateItems || []).length);
           if (mainCandidateOpen && mainItems.length > 0) {
-            await apiCall("copy_text", formatAllCandidates(mainItems));
+            await copyTextWithFallback(formatAllCandidates(mainItems));
           } else {
-            await apiCall("copy_text", state.resultText);
+            const mainText = String(state.resultText || getMainResultTextFromDom() || "");
+            await copyTextWithFallback(mainText);
           }
         }
         break;
@@ -2450,9 +2518,9 @@
         const item = state.historyPanel.items.find((x) => Number(x.id) === id);
         if (!item) break;
         if (action === "history-copy-source") {
-          await apiCall("copy_text", item.source_text || "");
+          await copyTextWithFallback(item.source_text || "");
         } else if (action === "history-copy-result") {
-          await apiCall("copy_text", item.result_text || "");
+          await copyTextWithFallback(item.result_text || "");
         } else {
           state.sourceText = item.source_text || "";
           state.resultText = item.result_text || "";

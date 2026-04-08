@@ -1714,6 +1714,7 @@ body[data-theme="dark"] .app-tooltip {
 }
 
 .zoom-shell {
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -1724,8 +1725,10 @@ body[data-theme="dark"] .app-tooltip {
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
   gap: 20px;
-  align-items: start;
-  min-height: 100%;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
 
 .zoom-section {
@@ -1733,10 +1736,11 @@ body[data-theme="dark"] .app-tooltip {
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  height: 100%;
 }
 
 .zoom-text {
-  min-height: 280px;
+  min-height: 0;
   flex: 1 1 auto;
   padding: 16px;
   line-height: 1.7;
@@ -1749,14 +1753,14 @@ body[data-theme="dark"] .app-tooltip {
 
 .zoom-modal .modal-panel {
   inset: auto;
-  top: 24px;
+  top: 50%;
   left: 50%;
   right: auto;
   bottom: auto;
   width: min(1200px, calc(100vw - 48px));
   height: min(860px, calc(100vh - 48px));
   min-height: 0;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   border-radius: var(--radius-lg);
   padding: 20px;
 }
@@ -1916,6 +1920,11 @@ body.view-bubble .bubble-toolbar .icon-button {
   opacity: 0.48;
   cursor: not-allowed;
   filter: grayscale(0.2);
+}
+
+.ghost-button.disabled,
+.ghost-button:disabled {
+  cursor: not-allowed;
 }
 
 body.view-main .result-card .mini-button.disabled,
@@ -2769,12 +2778,14 @@ body[data-theme="dark"].view-tray .tray-item.danger .icon {
   }
 
   .zoom-modal .modal-panel {
-    top: 10px;
-    left: 10px;
-    right: 10px;
-    width: auto;
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: calc(100vw - 20px);
     height: calc(100vh - 20px);
-    transform: none;
+    transform: translate(-50%, -50%);
     padding: 14px;
   }
 }
