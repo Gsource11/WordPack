@@ -199,7 +199,7 @@
   let trayBlurGuardMs = TRAY_BLUR_GUARD_MS;
   let trayOpenedAtMs = 0;
 
-  const choiceGroupMarkup = (field, currentValue, options) => `
+  const choiceGroupMarkup = (field, currentValue, options, valueType = "") => `
     <div class="choice-group">
       ${options.map((option) => `
         <button
@@ -207,6 +207,7 @@
           data-action="set-setting-choice"
           data-field="${escapeHtml(field)}"
           data-value="${escapeHtml(option.value)}"
+          ${valueType ? `data-value-type="${escapeHtml(valueType)}"` : ""}
           type="button"
         >${escapeHtml(option.label)}</button>`).join("")}
     </div>`;
@@ -1671,46 +1672,80 @@
                 <button class="ghost-button" data-action="clear-history-from-settings">${icons.trash}<span>一键清理历史</span></button>
               </div>
             </section>
-            <section class="setting-group">
+            <section class="setting-group operation-settings">
               <div class="setting-title">操作设置</div>
-              <div class="field">
-                <label class="toggle-row"><input type="checkbox" data-field="interaction.selection_enabled" ${selectionEnabled ? "checked" : ""}/>启用划词</label>
-              </div>
-              ${selectionEnabled ? `
-                <div class="field-row">
-                  <div class="field">
-                    <label>划词触发模式</label>
-                    ${choiceGroupMarkup("interaction.selection_trigger_mode", selectionTriggerMode, selectionModeOptions)}
-                  </div>
-                  ${selectionTriggerMode === "icon" ? `
-                  <div class="field">
-                    <label>图标触发方式</label>
-                    ${choiceGroupMarkup("interaction.selection_icon_trigger", draft.interaction?.selection_icon_trigger || "click", iconTriggerOptions)}
-                  </div>
-                  ` : ""}
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>启用划词翻译</label>
                 </div>
-                ${selectionTriggerMode === "icon" ? `
-                  <div class="field">
-                    <label>图标延时(ms)</label>
-                    <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 1500)}" />
+                <div class="setting-toggle-control">
+                  ${choiceGroupMarkup("interaction.selection_enabled", String(selectionEnabled), [
+                    { value: "true", label: "开启" },
+                    { value: "false", label: "关闭" },
+                  ], "boolean")}
+                </div>
+                ${selectionEnabled ? `
+                  <div class="setting-toggle-extra">
+                    <div class="field">
+                      <label>划词触发模式</label>
+                      ${choiceGroupMarkup("interaction.selection_trigger_mode", selectionTriggerMode, selectionModeOptions)}
+                    </div>
+                    ${selectionTriggerMode === "icon" ? `
+                    <div class="field">
+                      <label>图标触发方式</label>
+                      ${choiceGroupMarkup("interaction.selection_icon_trigger", draft.interaction?.selection_icon_trigger || "click", iconTriggerOptions)}
+                    </div>
+                    <div class="field">
+                      <label>图标延时(ms)</label>
+                      <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 1500)}" />
+                    </div>
+                    ` : ""}
                   </div>
                 ` : ""}
-              ` : ""}
-              <div class="field">
-                <label class="toggle-row"><input type="checkbox" data-field="interaction.screenshot_enabled" ${screenshotEnabled ? "checked" : ""}/>启用截图翻译</label>
               </div>
-              ${screenshotEnabled ? `
-                <div class="field">
-                  <label>截图翻译快捷键</label>
-                  <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="按下新的快捷键组合" readonly />
-                  <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>启用截图翻译</label>
                 </div>
-              ` : ""}
-              <div class="field">
-                <label class="toggle-row"><input type="checkbox" data-field="interaction.bubble_close_on_fast_mouse_leave" ${bubbleCloseOnFastMouseLeave ? "checked" : ""}/>鼠标快速移开即关闭气泡（未固定时）</label>
+                <div class="setting-toggle-control">
+                  ${choiceGroupMarkup("interaction.screenshot_enabled", String(screenshotEnabled), [
+                    { value: "true", label: "开启" },
+                    { value: "false", label: "关闭" },
+                  ], "boolean")}
+                </div>
+                ${screenshotEnabled ? `
+                  <div class="setting-toggle-extra">
+                    <div class="field">
+                      <label>截图翻译快捷键</label>
+                      <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="按下新的快捷键组合" readonly />
+                      <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
+                    </div>
+                  </div>
+                ` : ""}
               </div>
-              <div class="field">
-                <label class="toggle-row"><input type="checkbox" data-field="interaction.bubble_close_on_click_outside" ${bubbleCloseOnClickOutside ? "checked" : ""}/>点击气泡外区域关闭（未固定时）</label>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>鼠标快速移开关闭气泡</label>
+                  <small>仅在未固定时生效。</small>
+                </div>
+                <div class="setting-toggle-control">
+                  ${choiceGroupMarkup("interaction.bubble_close_on_fast_mouse_leave", String(bubbleCloseOnFastMouseLeave), [
+                    { value: "true", label: "开启" },
+                    { value: "false", label: "关闭" },
+                  ], "boolean")}
+                </div>
+              </div>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>点击气泡外区域关闭</label>
+                  <small>仅在未固定时生效。</small>
+                </div>
+                <div class="setting-toggle-control">
+                  ${choiceGroupMarkup("interaction.bubble_close_on_click_outside", String(bubbleCloseOnClickOutside), [
+                    { value: "true", label: "开启" },
+                    { value: "false", label: "关闭" },
+                  ], "boolean")}
+                </div>
               </div>
             </section>
           </div>

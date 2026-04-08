@@ -1483,7 +1483,7 @@ body.view-main .setting-group {
 .choice-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 
 .choice-chip {
@@ -1573,6 +1573,102 @@ body.view-main .choice-chip.active {
 .settings-actions {
   display: flex;
   gap: var(--space-2);
+}
+
+.operation-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.operation-settings .setting-toggle-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 18px;
+  row-gap: 8px;
+  margin: 0;
+  padding: 12px 12px 14px;
+  border: 1px solid rgba(96, 110, 128, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.operation-settings .setting-toggle-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.operation-settings .setting-toggle-meta label {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.operation-settings .setting-toggle-meta small {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.operation-settings .setting-toggle-control {
+  justify-self: end;
+}
+
+.operation-settings .setting-toggle-control .choice-group {
+  gap: 12px;
+}
+
+.operation-settings .setting-toggle-extra {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.operation-settings .setting-toggle-extra .field {
+  margin: 0;
+}
+
+.operation-settings .setting-toggle-extra .field-row {
+  margin: 0;
+}
+
+body.view-main .operation-settings .setting-toggle-extra .field label {
+  color: var(--text-2);
+}
+
+body[data-theme="dark"].view-main .operation-settings .setting-toggle-item {
+  border-color: rgba(198, 210, 226, 0.18);
+  background: rgba(36, 44, 54, 0.46);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 560px) {
+  .operation-settings {
+    gap: 8px;
+  }
+
+  .operation-settings .setting-toggle-item {
+    grid-template-columns: 1fr;
+    align-items: start;
+    row-gap: 10px;
+    padding: 12px 12px 14px;
+  }
+
+  .operation-settings .setting-toggle-control {
+    justify-self: start;
+  }
+
+  .operation-settings .setting-toggle-extra {
+    padding-top: 8px;
+  }
 }
 
 .ghost-button.testing .icon {
