@@ -23,7 +23,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableDirPage=no
 ShowLanguageDialog=yes
 LanguageDetectionMethod=uilanguage
-CloseApplications=no
+CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 
 [Languages]
@@ -281,5 +282,17 @@ begin
         MB_OK
       );
     end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    { Ensure running instances are terminated before file deletion. }
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "{#MyAppExeName}" /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(300);
   end;
 end;
