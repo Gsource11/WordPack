@@ -2,6 +2,7 @@
 
 import threading
 import time
+import logging
 from ctypes import POINTER, WINFUNCTYPE, Structure, byref, cast, c_void_p, windll
 from ctypes import wintypes
 from typing import Callable
@@ -9,6 +10,7 @@ from typing import Callable
 
 user32 = windll.user32
 kernel32 = windll.kernel32
+logger = logging.getLogger("wordpack.hotkeys")
 
 
 WM_HOTKEY = 0x0312
@@ -203,6 +205,21 @@ class HotkeyManager:
             kernel32.GetModuleHandleW(None),
             0,
         )
+        if not self._keyboard_hook:
+            # Retry with null module handle for environments where binding to
+            # current module fails for low-level keyboard hook.
+            self._keyboard_hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                self._keyboard_proc,
+                None,
+                0,
+            )
+        if not self._keyboard_hook:
+            try:
+                err = int(kernel32.GetLastError())
+            except Exception:
+                err = -1
+            logger.warning("Keyboard hook install failed, last_error=%s", err)
 
         msg = MSG()
         while not self._stop_event.is_set():
