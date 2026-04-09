@@ -176,6 +176,8 @@ class WordPackWebviewApp:
         self._screenshot_cancel_last_at = 0.0
         self._screenshot_starting = False
         self._last_screenshot_trigger_at = 0.0
+        self._screenshot_ocr_request_seq = 0
+        self._screenshot_ocr_suppress_bubble_until_seq = 0
         self._selection_suppressed_until = 0.0
         self._last_window_interaction_at = 0.0
         self._input_poll_stop = threading.Event()
@@ -1201,6 +1203,10 @@ class WordPackWebviewApp:
             elif kind == "bubble":
                 self.bubble_window = None
                 self._bubble_state.visible = False
+                self._screenshot_ocr_suppress_bubble_until_seq = max(
+                    int(self._screenshot_ocr_suppress_bubble_until_seq),
+                    int(self._screenshot_ocr_request_seq),
+                )
             elif kind == "icon":
                 self.icon_window = None
                 self._native_icon_overlay.hide()
@@ -2510,6 +2516,8 @@ class WordPackWebviewApp:
         return response
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prev_screenshot_enabled = bool(self.config.interaction.screenshot_enabled)
+        prev_screenshot_hotkey = normalize_shortcut(str(self.config.interaction.screenshot_hotkey or ""))
         openai = payload.get("openai", {}) if isinstance(payload, dict) else {}
         interaction = payload.get("interaction", {}) if isinstance(payload, dict) else {}
         dictionary = payload.get("dictionary", {}) if isinstance(payload, dict) else {}
@@ -2655,11 +2663,16 @@ class WordPackWebviewApp:
         self.config_store.save(self.config)
         self._apply_theme_backgrounds()
         self._prune_history_by_policy()
-        try:
-            self.hotkeys.stop()
-            self.hotkeys.start()
-        except Exception:
-            self.logger.exception("Failed to restart hotkey manager after settings update")
+        screenshot_hotkey_changed = (
+            prev_screenshot_enabled != bool(self.config.interaction.screenshot_enabled)
+            or prev_screenshot_hotkey != normalize_shortcut(str(self.config.interaction.screenshot_hotkey or ""))
+        )
+        if screenshot_hotkey_changed:
+            try:
+                self.hotkeys.stop()
+                self.hotkeys.start()
+            except Exception:
+                self.logger.exception("Failed to restart hotkey manager after settings update")
 
         if startup_status_message:
             self.set_status(startup_status_message)
@@ -2974,6 +2987,11 @@ class WordPackWebviewApp:
         self._clear_screenshot_background_image()
         self._restore_main_after_screenshot(main_was_hidden=self._main_hidden_flag_for_session(session))
         self.set_status("正在识别截图文字...")
+        try:
+            anchor_x, anchor_y = get_cursor_position()
+        except Exception:
+            anchor_x = (left + right) // 2
+            anchor_y = (top + bottom) // 2
 
         if session.show_bubble:
             self._show_bubble(
@@ -2982,25 +3000,39 @@ class WordPackWebviewApp:
                 pending=True,
                 action="截图翻译",
                 mode=self.config.translation_mode,
-                anchor=(left, top),
+                anchor=(int(anchor_x), int(anchor_y)),
             )
 
         self._begin_screenshot_ocr_and_translate(image=image, show_bubble=session.show_bubble)
         return {"ok": True}
 
     def _begin_screenshot_ocr_and_translate(self, image, *, show_bubble: bool) -> None:
+        with self.lock:
+            self._screenshot_ocr_request_seq += 1
+            request_seq = int(self._screenshot_ocr_request_seq)
+
+        def can_show_bubble() -> bool:
+            with self.lock:
+                if int(request_seq) != int(self._screenshot_ocr_request_seq):
+                    return False
+                return bool(
+                    show_bubble
+                    and int(request_seq) > int(self._screenshot_ocr_suppress_bubble_until_seq)
+                )
+
         def worker() -> None:
             try:
                 text = self.ocr_service.extract_text(image).strip()
                 if not text:
                     raise RuntimeError("截图中未识别到可翻译文本")
-                if not show_bubble:
+                effective_show_bubble = can_show_bubble()
+                if not effective_show_bubble:
                     self.bridge.send("main", "screenshot-ocr-ready", {"sourceText": text})
-                self._start_translate(text=text, action="截图翻译", show_bubble=show_bubble)
+                self._start_translate(text=text, action="截图翻译", show_bubble=effective_show_bubble)
             except Exception as exc:
                 message = self._user_friendly_message(str(exc), scene="screenshot")
                 self.set_status(message)
-                if show_bubble:
+                if can_show_bubble():
                     self._update_bubble(
                         "截图 OCR",
                         message,
@@ -3895,6 +3927,10 @@ class WordPackWebviewApp:
                 self._bubble_state.visible = False
                 self._bubble_state.pending = False
                 self._bubble_state.pinned = False
+                self._screenshot_ocr_suppress_bubble_until_seq = max(
+                    int(self._screenshot_ocr_suppress_bubble_until_seq),
+                    int(self._screenshot_ocr_request_seq),
+                )
                 window = self.bubble_window
                 self.bubble_window = None
         elif kind == "tray":

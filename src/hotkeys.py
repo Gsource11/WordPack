@@ -124,6 +124,7 @@ class HotkeyManager:
     def __init__(self, callback, shortcut_getter: Callable[[], dict[str, str]] | None = None) -> None:
         self.callback = callback
         self.shortcut_getter = shortcut_getter or (lambda: {})
+        self._state_lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
         self._stop_event = threading.Event()
@@ -141,21 +142,39 @@ class HotkeyManager:
         self._registered_hotkeys: list[int] = []
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        thread: threading.Thread | None
+        with self._state_lock:
+            thread = self._thread
+        if thread and thread.is_alive():
+            if self._stop_event.is_set():
+                thread.join(timeout=1.5)
+            else:
+                return
+
+        with self._state_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread_id:
-            user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
-        if self._thread:
-            self._thread.join(timeout=1.2)
+        with self._state_lock:
+            self._stop_event.set()
+            thread_id = int(self._thread_id or 0)
+            thread = self._thread
+        if thread_id:
+            user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0)
+        if thread:
+            thread.join(timeout=1.2)
+        with self._state_lock:
+            if self._thread is thread and (thread is None or not thread.is_alive()):
+                self._thread = None
+                self._thread_id = 0
 
     def _loop(self) -> None:
-        self._thread_id = kernel32.GetCurrentThreadId()
+        with self._state_lock:
+            self._thread_id = kernel32.GetCurrentThreadId()
         shortcut_map = {
             "screenshot_translate": "",
         }
@@ -199,6 +218,10 @@ class HotkeyManager:
         for hotkey_id in self._registered_hotkeys:
             user32.UnregisterHotKey(None, hotkey_id)
         self._registered_hotkeys.clear()
+        with self._state_lock:
+            if self._thread and (threading.current_thread() is self._thread):
+                self._thread = None
+            self._thread_id = 0
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
         if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):

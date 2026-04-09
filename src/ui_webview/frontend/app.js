@@ -2922,8 +2922,7 @@
         }
         break;
       case "screenshot-ocr-ready":
-        state.sourceText = payload.sourceText || state.sourceText;
-        if (patchMainDynamic()) return;
+        shouldRerender = false;
         break;
       case "tray-open-panel":
         {
