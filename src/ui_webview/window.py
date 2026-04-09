@@ -170,6 +170,10 @@ class WordPackWebviewApp:
         self._selection_hover_entered_at = 0.0
         self._selection_hover_last_cursor: tuple[int, int] | None = None
         self._selection_hover_last_at = 0.0
+        self._bubble_fast_close_pending_at = 0.0
+        self._bubble_fast_close_pending_distance = 0
+        self._bubble_last_fast_closed_at = 0.0
+        self._bubble_last_fast_closed_snapshot: dict[str, Any] | None = None
         self._screenshot_session: ScreenshotSession | None = None
         self._screenshot_session_seq = 0
         self._screenshot_background_path: Path | None = None
@@ -619,17 +623,27 @@ class WordPackWebviewApp:
         screenshot_hotkey = ""
         if self.config.interaction.screenshot_enabled:
             screenshot_hotkey = normalize_shortcut(self.config.interaction.screenshot_hotkey)
+        restore_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
+        toggle_main_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "main_toggle_hotkey", "") or ""))
         return {
             "screenshot_translate": screenshot_hotkey,
+            "restore_bubble": restore_hotkey,
+            "toggle_main_window": toggle_main_hotkey,
         }
 
     def _shortcut_descriptions(self) -> list[str]:
         screenshot = ""
         if self.config.interaction.screenshot_enabled:
             screenshot = normalize_shortcut(self.config.interaction.screenshot_hotkey)
+        restore_bubble = normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
+        toggle_main = normalize_shortcut(str(getattr(self.config.interaction, "main_toggle_hotkey", "") or ""))
         items: list[str] = []
         if screenshot:
             items.append(f"{screenshot} 截图翻译")
+        if restore_bubble:
+            items.append(f"{restore_bubble} 恢复最近关闭气泡")
+        if toggle_main:
+            items.append(f"{toggle_main} 显示/隐藏主窗口")
         return items
 
     def _current_main_geometry(self) -> tuple[int, int, int, int] | None:
@@ -1203,6 +1217,8 @@ class WordPackWebviewApp:
             elif kind == "bubble":
                 self.bubble_window = None
                 self._bubble_state.visible = False
+                self._bubble_fast_close_pending_at = 0.0
+                self._bubble_fast_close_pending_distance = 0
                 self._screenshot_ocr_suppress_bubble_until_seq = max(
                     int(self._screenshot_ocr_suppress_bubble_until_seq),
                     int(self._screenshot_ocr_request_seq),
@@ -2518,6 +2534,8 @@ class WordPackWebviewApp:
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         prev_screenshot_enabled = bool(self.config.interaction.screenshot_enabled)
         prev_screenshot_hotkey = normalize_shortcut(str(self.config.interaction.screenshot_hotkey or ""))
+        prev_restore_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
+        prev_toggle_main_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "main_toggle_hotkey", "") or ""))
         openai = payload.get("openai", {}) if isinstance(payload, dict) else {}
         interaction = payload.get("interaction", {}) if isinstance(payload, dict) else {}
         dictionary = payload.get("dictionary", {}) if isinstance(payload, dict) else {}
@@ -2612,6 +2630,17 @@ class WordPackWebviewApp:
 
         screenshot_enabled = bool(interaction.get("screenshot_enabled", self.config.interaction.screenshot_enabled))
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
+        bubble_restore_hotkey = normalize_shortcut(str(interaction.get("bubble_restore_hotkey", getattr(self.config.interaction, "bubble_restore_hotkey", "")) or ""))
+        main_toggle_hotkey = normalize_shortcut(str(interaction.get("main_toggle_hotkey", getattr(self.config.interaction, "main_toggle_hotkey", "")) or ""))
+        has_fast_close_profile_key = isinstance(interaction, dict) and ("bubble_fast_close_profile" in interaction)
+        fast_close_profile_raw = interaction.get(
+            "bubble_fast_close_profile",
+            getattr(self.config.interaction, "bubble_fast_close_profile", ""),
+        )
+        fast_close_profile = ConfigStore._normalize_bubble_fast_close_profile(
+            fast_close_profile_raw,
+            legacy_enabled=bool(interaction.get("bubble_close_on_fast_mouse_leave", self.config.interaction.bubble_close_on_fast_mouse_leave)),
+        )
         bubble_close_on_fast_mouse_leave = bool(
             interaction.get("bubble_close_on_fast_mouse_leave", self.config.interaction.bubble_close_on_fast_mouse_leave)
         )
@@ -2629,7 +2658,14 @@ class WordPackWebviewApp:
         self.config.interaction.selection_icon_trigger = icon_trigger
         self.config.interaction.screenshot_enabled = screenshot_enabled
         self.config.interaction.screenshot_hotkey = screenshot_hotkey
-        self.config.interaction.bubble_close_on_fast_mouse_leave = bubble_close_on_fast_mouse_leave
+        self.config.interaction.bubble_restore_hotkey = bubble_restore_hotkey
+        self.config.interaction.main_toggle_hotkey = main_toggle_hotkey
+        self.config.interaction.bubble_fast_close_profile = fast_close_profile
+        self.config.interaction.bubble_close_on_fast_mouse_leave = bool(
+            fast_close_profile != "off"
+            if has_fast_close_profile_key
+            else (fast_close_profile != "off" and bubble_close_on_fast_mouse_leave)
+        )
         self.config.interaction.bubble_close_on_click_outside = bubble_close_on_click_outside
         self.config.interaction.selection_icon_delay_ms = max(0, min(5000, icon_delay_ms))
         self.config.interaction.selection_drag_min_px = max(3, min(40, drag_min_px))
@@ -2666,6 +2702,8 @@ class WordPackWebviewApp:
         screenshot_hotkey_changed = (
             prev_screenshot_enabled != bool(self.config.interaction.screenshot_enabled)
             or prev_screenshot_hotkey != normalize_shortcut(str(self.config.interaction.screenshot_hotkey or ""))
+            or prev_restore_hotkey != normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
+            or prev_toggle_main_hotkey != normalize_shortcut(str(getattr(self.config.interaction, "main_toggle_hotkey", "") or ""))
         )
         if screenshot_hotkey_changed:
             try:
@@ -3764,6 +3802,14 @@ class WordPackWebviewApp:
                 self.start_screenshot_capture(show_bubble=True)
             return
 
+        if event == "restore_bubble":
+            self.restore_recent_fast_closed_bubble()
+            return
+
+        if event == "toggle_main_window":
+            self.toggle_main_window_visibility()
+            return
+
     def _handle_selection_candidate(self, candidate: SelectionCandidate) -> None:
         if self._screenshot_session is not None:
             return
@@ -3927,6 +3973,8 @@ class WordPackWebviewApp:
                 self._bubble_state.visible = False
                 self._bubble_state.pending = False
                 self._bubble_state.pinned = False
+                self._bubble_fast_close_pending_at = 0.0
+                self._bubble_fast_close_pending_distance = 0
                 self._screenshot_ocr_suppress_bubble_until_seq = max(
                     int(self._screenshot_ocr_suppress_bubble_until_seq),
                     int(self._screenshot_ocr_request_seq),
@@ -3973,6 +4021,32 @@ class WordPackWebviewApp:
                 self.logger.exception("Failed to close %s window", kind)
 
         return {"ok": True}
+
+    def toggle_main_window_visibility(self) -> dict[str, Any]:
+        if self.main_window is None:
+            return {"ok": False, "message": "主窗口不可用"}
+        if self._is_main_window_visible():
+            result = self.close_window("main")
+            self.set_status("主窗口已隐藏到托盘")
+            return result
+        try:
+            self._run_on_window_ui(
+                self.main_window,
+                lambda: self.main_window.show(),
+                wait=True,
+                timeout_sec=1.2,
+                log_prefix="toggle_main_window_visibility.show",
+            )
+            self.hidden = False
+            try:
+                self.close_window("tray")
+            except Exception:
+                pass
+            self.set_status("主窗口已显示")
+            return {"ok": True, "hidden": False}
+        except Exception:
+            self.logger.exception("Failed to show main window via hotkey")
+            return {"ok": False, "message": "主窗口显示失败"}
 
     def _start_input_polling(self) -> None:
         if self._input_poll_thread is not None and self._input_poll_thread.is_alive():
@@ -4098,7 +4172,66 @@ class WordPackWebviewApp:
         return left <= cursor_x <= right and top <= cursor_y <= bottom
 
     def _bubble_close_on_fast_mouse_leave_enabled(self) -> bool:
-        return bool(getattr(self.config.interaction, "bubble_close_on_fast_mouse_leave", False))
+        return self._bubble_fast_close_profile() != "off"
+
+    def _bubble_fast_close_profile(self) -> str:
+        value = str(getattr(self.config.interaction, "bubble_fast_close_profile", "") or "").strip().lower()
+        if value in {"off", "loose", "standard", "aggressive"}:
+            return value
+        legacy = bool(getattr(self.config.interaction, "bubble_close_on_fast_mouse_leave", False))
+        return "standard" if legacy else "off"
+
+    def _bubble_fast_close_params(self) -> dict[str, float]:
+        profile = self._bubble_fast_close_profile()
+        defaults = {
+            "edge_padding": 16.0,
+            "min_speed_px_s": 1050.0,
+            "min_distance_px": 80.0,
+            "min_step_px": 30.0,
+            "min_distance_growth_px": 6.0,
+            "min_direction_cos": 0.18,
+            "confirm_delay_sec": 0.09,
+            "confirm_window_sec": 0.42,
+            "confirm_min_distance_ratio": 0.68,
+            "interaction_cooldown_sec": 0.95,
+        }
+        if profile == "aggressive":
+            return {
+                **defaults,
+                "edge_padding": 10.0,
+                "min_speed_px_s": 850.0,
+                "min_distance_px": 60.0,
+                "min_step_px": 24.0,
+                "min_distance_growth_px": 4.0,
+                "min_direction_cos": 0.08,
+                "confirm_delay_sec": 0.07,
+                "confirm_window_sec": 0.36,
+                "confirm_min_distance_ratio": 0.55,
+                "interaction_cooldown_sec": 0.75,
+            }
+        if profile == "loose":
+            return {
+                **defaults,
+                "edge_padding": 24.0,
+                "min_speed_px_s": 1200.0,
+                "min_distance_px": 96.0,
+                "min_step_px": 36.0,
+                "min_distance_growth_px": 7.0,
+                "min_direction_cos": 0.24,
+                "confirm_delay_sec": 0.1,
+                "confirm_window_sec": 0.48,
+                "confirm_min_distance_ratio": 0.75,
+                "interaction_cooldown_sec": 1.1,
+            }
+        return defaults
+
+    def _bubble_is_interactive_now(self) -> bool:
+        with self.lock:
+            if self.bubble_window is None:
+                return False
+            if bool(self._bubble_state.pending or self._bubble_state.candidate_pending):
+                return True
+        return False
 
     def _bubble_close_on_click_outside_enabled(self) -> bool:
         return bool(getattr(self.config.interaction, "bubble_close_on_click_outside", False))
@@ -4112,7 +4245,7 @@ class WordPackWebviewApp:
         if self._cursor_distance_to_bubble(cursor_pos) > 0:
             self.close_window("bubble")
 
-    def _cursor_distance_to_bubble(self, cursor_pos: tuple[int, int]) -> int:
+    def _cursor_distance_to_bubble(self, cursor_pos: tuple[int, int], *, edge_padding: int = 0) -> int:
         with self.lock:
             window = self.bubble_window
             fallback = (
@@ -4127,6 +4260,11 @@ class WordPackWebviewApp:
             return 0
 
         left, top, right, bottom = self._get_window_rect(window, fallback)
+        if edge_padding > 0:
+            left -= int(edge_padding)
+            top -= int(edge_padding)
+            right += int(edge_padding)
+            bottom += int(edge_padding)
         cx, cy = int(cursor_pos[0]), int(cursor_pos[1])
         dx = 0 if left <= cx <= right else (left - cx if cx < left else cx - right)
         dy = 0 if top <= cy <= bottom else (top - cy if cy < top else cy - bottom)
@@ -4195,38 +4333,158 @@ class WordPackWebviewApp:
         self._selection_hover_entered_at = 0.0
         threading.Thread(target=self.trigger_selection_translate, daemon=True).start()
 
+    def _capture_bubble_snapshot(self) -> dict[str, Any] | None:
+        with self.lock:
+            if self.bubble_window is None or not bool(self._bubble_state.visible):
+                return None
+            return {
+                "source_text": str(self._bubble_state.source_text or ""),
+                "result_text": str(self._bubble_state.result_text or ""),
+                "pending": bool(self._bubble_state.pending),
+                "action": str(self._bubble_state.action or "划词翻译"),
+                "mode": str(self._bubble_state.mode or self.config.translation_mode),
+                "x": int(self._bubble_state.x or 0),
+                "y": int(self._bubble_state.y or 0),
+                "height": int(self._bubble_state.height or self.BUBBLE_HEIGHT),
+                "candidate_pending": bool(self._bubble_state.candidate_pending),
+                "candidate_items": list(self._bubble_state.candidate_items or []),
+            }
+
+    def _close_bubble_by_fast_leave(self) -> None:
+        snapshot = self._capture_bubble_snapshot()
+        if snapshot is not None:
+            with self.lock:
+                self._bubble_last_fast_closed_snapshot = snapshot
+                self._bubble_last_fast_closed_at = time.time()
+        self.close_window("bubble")
+        restore_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
+        if restore_hotkey:
+            self.set_status(f"气泡已关闭（可按 {restore_hotkey} 撤销）")
+        else:
+            self.set_status("气泡已关闭")
+
+    def restore_recent_fast_closed_bubble(self) -> dict[str, Any]:
+        with self.lock:
+            snapshot = dict(self._bubble_last_fast_closed_snapshot or {}) if self._bubble_last_fast_closed_snapshot else None
+            closed_at = float(self._bubble_last_fast_closed_at or 0.0)
+            already_visible = self.bubble_window is not None
+        if snapshot is None:
+            return {"ok": False, "message": "没有可恢复的气泡"}
+        if already_visible:
+            return {"ok": False, "message": "当前已有气泡"}
+        if (time.time() - closed_at) > 2.0:
+            return {"ok": False, "message": "可撤销窗口已过期"}
+
+        self._show_bubble(
+            source_text=str(snapshot.get("source_text", "") or ""),
+            result_text=str(snapshot.get("result_text", "") or ""),
+            pending=bool(snapshot.get("pending", False)),
+            action=str(snapshot.get("action", "划词翻译") or "划词翻译"),
+            mode=str(snapshot.get("mode", self.config.translation_mode) or self.config.translation_mode),
+            anchor=(int(snapshot.get("x", 0) or 0), int(snapshot.get("y", 0) or 0)),
+        )
+        with self.lock:
+            self._bubble_state.candidate_pending = bool(snapshot.get("candidate_pending", False))
+            self._bubble_state.candidate_items = list(snapshot.get("candidate_items", []) or [])
+            self._bubble_last_fast_closed_snapshot = None
+            self._bubble_last_fast_closed_at = 0.0
+        self._emit_bubble_updated()
+        self.set_status("已恢复气泡")
+        return {"ok": True}
+
     def _maybe_hide_bubble_by_cursor(
         self,
         cursor_pos: tuple[int, int],
         cursor_step: int,
         cursor_dt: float,
+        cursor_dx: int,
+        cursor_dy: int,
         *,
         lbtn_down: bool,
     ) -> None:
         if not self._bubble_close_on_fast_mouse_leave_enabled():
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
             return
         # Dragging bubble (left button pressed) should never be treated as
         # "quick mouse leave", otherwise window-drag can close the bubble.
         if lbtn_down:
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
             return
-        # Skip a short cooldown right after any window interaction (e.g. drag start).
-        if (time.time() - float(self._last_window_interaction_at or 0.0)) <= 0.65 and self._is_our_window_foreground():
+        params = self._bubble_fast_close_params()
+        # Skip a short cooldown right after any window interaction (e.g. drag/select/scroll start).
+        if (time.time() - float(self._last_window_interaction_at or 0.0)) <= float(params["interaction_cooldown_sec"]) and self._is_our_window_foreground():
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
+            return
+        if self._bubble_is_interactive_now():
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
             return
         with self.lock:
             if self.bubble_window is None or self._bubble_state.pinned:
+                self._bubble_fast_close_pending_at = 0.0
+                self._bubble_fast_close_pending_distance = 0
                 return
 
-        if self._is_cursor_inside_bubble():
+        edge_padding = int(params["edge_padding"])
+        if self._cursor_distance_to_bubble(cursor_pos, edge_padding=edge_padding) <= 0:
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
             return
-        if cursor_step <= 0 or cursor_dt <= 0:
+        if cursor_step <= 0 or cursor_dt <= 0 or (cursor_dx == 0 and cursor_dy == 0):
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
             return
 
-        distance = self._cursor_distance_to_bubble(cursor_pos)
+        distance = self._cursor_distance_to_bubble(cursor_pos, edge_padding=edge_padding)
+        previous_cursor = (int(cursor_pos[0]) - int(cursor_dx), int(cursor_pos[1]) - int(cursor_dy))
+        prev_distance = self._cursor_distance_to_bubble(previous_cursor, edge_padding=edge_padding)
         speed = cursor_step / max(cursor_dt, 0.001)
-        quick_slide = cursor_step >= 36 and cursor_dt <= 0.06 and distance >= 90
-        quickly_away = speed >= 1100 and distance >= 70
-        if quick_slide or quickly_away:
-            self.close_window("bubble")
+        now = time.time()
+        pending_at = float(self._bubble_fast_close_pending_at or 0.0)
+        if pending_at > 0.0:
+            elapsed = now - pending_at
+            min_hold_distance = max(24.0, float(params["min_distance_px"]) * float(params["confirm_min_distance_ratio"]))
+            if elapsed > float(params["confirm_window_sec"]) or distance < min_hold_distance:
+                self._bubble_fast_close_pending_at = 0.0
+                self._bubble_fast_close_pending_distance = 0
+                return
+            if elapsed >= float(params["confirm_delay_sec"]):
+                self._bubble_fast_close_pending_at = 0.0
+                self._bubble_fast_close_pending_distance = 0
+                self._close_bubble_by_fast_leave()
+            return
+
+        if speed < float(params["min_speed_px_s"]):
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
+            return
+        if cursor_step < float(params["min_step_px"]) or distance < float(params["min_distance_px"]):
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
+            return
+        if (distance - prev_distance) < float(params["min_distance_growth_px"]):
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
+            return
+
+        with self.lock:
+            bubble_center_x = int((self._bubble_state.x or 0) + (self._bubble_state.width or self.BUBBLE_WIDTH) // 2)
+            bubble_center_y = int((self._bubble_state.y or 0) + (self._bubble_state.height or self.BUBBLE_HEIGHT) // 2)
+        vec_x = int(cursor_pos[0]) - bubble_center_x
+        vec_y = int(cursor_pos[1]) - bubble_center_y
+        move_norm = max(1.0, (float(cursor_dx * cursor_dx + cursor_dy * cursor_dy) ** 0.5))
+        away_norm = max(1.0, (float(vec_x * vec_x + vec_y * vec_y) ** 0.5))
+        direction_cos = ((float(cursor_dx * vec_x + cursor_dy * vec_y)) / (move_norm * away_norm))
+        if direction_cos < float(params["min_direction_cos"]):
+            self._bubble_fast_close_pending_at = 0.0
+            self._bubble_fast_close_pending_distance = 0
+            return
+
+        self._bubble_fast_close_pending_at = now
+        self._bubble_fast_close_pending_distance = int(distance)
 
     def _shortcut_is_active(
         self,
@@ -4295,11 +4553,15 @@ class WordPackWebviewApp:
                 current_cursor = (cursor_x, cursor_y)
                 cursor_step = 0
                 cursor_dt = 0.0
+                cursor_dx = 0
+                cursor_dy = 0
                 if self._cursor_last_pos is None:
                     self._cursor_last_pos = current_cursor
                     self._cursor_last_move_at = now
                 elif current_cursor != self._cursor_last_pos:
-                    cursor_step = abs(current_cursor[0] - self._cursor_last_pos[0]) + abs(current_cursor[1] - self._cursor_last_pos[1])
+                    cursor_dx = int(current_cursor[0] - self._cursor_last_pos[0])
+                    cursor_dy = int(current_cursor[1] - self._cursor_last_pos[1])
+                    cursor_step = abs(cursor_dx) + abs(cursor_dy)
                     cursor_dt = now - self._cursor_last_move_at if self._cursor_last_move_at > 0 else 0.0
                     self._cursor_last_pos = current_cursor
                     self._cursor_last_move_at = now
@@ -4440,6 +4702,8 @@ class WordPackWebviewApp:
                     current_cursor,
                     cursor_step,
                     cursor_dt,
+                    cursor_dx,
+                    cursor_dy,
                     lbtn_down=lbtn_down,
                 )
 

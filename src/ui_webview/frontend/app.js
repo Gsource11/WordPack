@@ -1401,7 +1401,13 @@
     const selectionTriggerMode = draft.interaction?.selection_trigger_mode || "double_ctrl";
     const screenshotEnabled = draft.interaction?.screenshot_enabled !== false;
     const screenshotHotkey = draft.interaction?.screenshot_hotkey ?? "";
-    const bubbleCloseOnFastMouseLeave = draft.interaction?.bubble_close_on_fast_mouse_leave === true;
+    const bubbleRestoreHotkey = draft.interaction?.bubble_restore_hotkey ?? "Ctrl+Shift+Z";
+    const mainToggleHotkey = draft.interaction?.main_toggle_hotkey ?? "Ctrl+Alt+W";
+    const bubbleFastCloseProfile = String(
+      draft.interaction?.bubble_fast_close_profile
+      || (draft.interaction?.bubble_close_on_fast_mouse_leave ? "standard" : "off")
+      || "off",
+    ).toLowerCase();
     const bubbleCloseOnClickOutside = draft.interaction?.bubble_close_on_click_outside === true;
     const directionOptions = Array.from(new Set([
       "auto",
@@ -1618,7 +1624,15 @@
                     type="button"
                   >关闭</button>
                 </div>
-                <small>登录 Windows 后自动启动 WordPack。</small>
+              </div>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>主窗口显示/隐藏快捷键</label>
+                  <small>快速唤起主窗口，或隐藏到托盘。</small>
+                </div>
+                <div class="setting-toggle-control">
+                  <input class="shortcut-input" data-shortcut-field="interaction.main_toggle_hotkey" value="${escapeHtml(mainToggleHotkey)}" placeholder="按下新的快捷键组合" readonly />
+                </div>
               </div>
             </section>
             <section class="setting-group">
@@ -1725,14 +1739,16 @@
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>鼠标快速移开关闭气泡</label>
-                  <small>仅在未固定时生效。</small>
+                  <label>鼠标快速移开关闭气泡（档位）</label>
+                  <small>仅在未固定且非交互状态生效。</small>
                 </div>
                 <div class="setting-toggle-control">
-                  ${choiceGroupMarkup("interaction.bubble_close_on_fast_mouse_leave", String(bubbleCloseOnFastMouseLeave), [
-                    { value: "true", label: "开启" },
-                    { value: "false", label: "关闭" },
-                  ], "boolean")}
+                  ${choiceGroupMarkup("interaction.bubble_fast_close_profile", bubbleFastCloseProfile, [
+                    { value: "off", label: "关闭" },
+                    { value: "loose", label: "宽松" },
+                    { value: "standard", label: "标准" },
+                    { value: "aggressive", label: "激进" },
+                  ])}
                 </div>
               </div>
               <div class="field setting-toggle-item">
@@ -1745,6 +1761,15 @@
                     { value: "true", label: "开启" },
                     { value: "false", label: "关闭" },
                   ], "boolean")}
+                </div>
+              </div>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>恢复最近关闭气泡快捷键</label>
+                  <small>快移关闭后 2 秒内可撤销恢复。</small>
+                </div>
+                <div class="setting-toggle-control">
+                  <input class="shortcut-input" data-shortcut-field="interaction.bubble_restore_hotkey" value="${escapeHtml(bubbleRestoreHotkey)}" placeholder="按下新的快捷键组合" readonly />
                 </div>
               </div>
             </section>

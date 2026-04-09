@@ -30,9 +30,13 @@ MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 
 HOTKEY_ID_SCREENSHOT = 1003
+HOTKEY_ID_RESTORE_BUBBLE = 1004
+HOTKEY_ID_TOGGLE_MAIN = 1005
 
 HOTKEY_EVENT_MAP = {
     HOTKEY_ID_SCREENSHOT: "screenshot_translate",
+    HOTKEY_ID_RESTORE_BUBBLE: "restore_bubble",
+    HOTKEY_ID_TOGGLE_MAIN: "toggle_main_window",
 }
 
 KEY_NAME_TO_VK = {chr(code): code for code in range(ord("A"), ord("Z") + 1)}
@@ -177,6 +181,8 @@ class HotkeyManager:
             self._thread_id = kernel32.GetCurrentThreadId()
         shortcut_map = {
             "screenshot_translate": "",
+            "restore_bubble": "",
+            "toggle_main_window": "",
         }
         shortcut_map.update(self.shortcut_getter() or {})
 

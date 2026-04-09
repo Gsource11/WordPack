@@ -36,7 +36,10 @@ class InteractionConfig:
     selection_icon_trigger: str = "click"  # click | hover
     screenshot_enabled: bool = True
     screenshot_hotkey: str = "Ctrl+Alt+S"
+    bubble_restore_hotkey: str = "Ctrl+Shift+Z"
+    main_toggle_hotkey: str = "Ctrl+Alt+W"
     bubble_close_on_fast_mouse_leave: bool = False
+    bubble_fast_close_profile: str = "off"  # off | loose | standard | aggressive
     bubble_close_on_click_outside: bool = False
     selection_icon_delay_ms: int = 1500
     selection_drag_min_px: int = 9
@@ -88,6 +91,17 @@ class ConfigStore:
         # Keep empty by default: user global mode should remain authoritative unless
         # the user explicitly creates per-app overrides.
         return []
+
+    @staticmethod
+    def _normalize_bubble_fast_close_profile(
+        profile: object,
+        *,
+        legacy_enabled: bool = False,
+    ) -> str:
+        value = str(profile or "").strip().lower()
+        if value in {"off", "loose", "standard", "aggressive"}:
+            return value
+        return "standard" if bool(legacy_enabled) else "off"
 
     @staticmethod
     def _normalize_selection_profile_item(item: object) -> SelectionAppProfile | None:
@@ -163,8 +177,14 @@ class ConfigStore:
                     )
                     or ""
                 ).strip(),
+                bubble_restore_hotkey=str(interaction_raw.get("bubble_restore_hotkey", "Ctrl+Shift+Z") or "").strip(),
+                main_toggle_hotkey=str(interaction_raw.get("main_toggle_hotkey", "Ctrl+Alt+W") or "").strip(),
                 bubble_close_on_fast_mouse_leave=bool(
                     interaction_raw.get("bubble_close_on_fast_mouse_leave", False)
+                ),
+                bubble_fast_close_profile=self._normalize_bubble_fast_close_profile(
+                    interaction_raw.get("bubble_fast_close_profile", ""),
+                    legacy_enabled=bool(interaction_raw.get("bubble_close_on_fast_mouse_leave", False)),
                 ),
                 bubble_close_on_click_outside=bool(interaction_raw.get("bubble_close_on_click_outside", False)),
                 selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
@@ -194,11 +214,17 @@ class ConfigStore:
         if cfg.interaction.selection_trigger_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
             cfg.interaction.selection_trigger_mode = "double_ctrl"
         cfg.interaction.startup_launch_enabled = bool(cfg.interaction.startup_launch_enabled)
-        cfg.interaction.bubble_close_on_fast_mouse_leave = bool(cfg.interaction.bubble_close_on_fast_mouse_leave)
+        cfg.interaction.bubble_fast_close_profile = self._normalize_bubble_fast_close_profile(
+            getattr(cfg.interaction, "bubble_fast_close_profile", ""),
+            legacy_enabled=bool(getattr(cfg.interaction, "bubble_close_on_fast_mouse_leave", False)),
+        )
+        cfg.interaction.bubble_close_on_fast_mouse_leave = bool(cfg.interaction.bubble_fast_close_profile != "off")
         cfg.interaction.bubble_close_on_click_outside = bool(cfg.interaction.bubble_close_on_click_outside)
         if cfg.interaction.selection_icon_trigger not in {"click", "hover"}:
             cfg.interaction.selection_icon_trigger = "click"
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
+        cfg.interaction.bubble_restore_hotkey = str(cfg.interaction.bubble_restore_hotkey or "").strip()
+        cfg.interaction.main_toggle_hotkey = str(cfg.interaction.main_toggle_hotkey or "").strip()
         cfg.interaction.selection_icon_delay_ms = max(0, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
         cfg.interaction.selection_drag_min_px = max(3, min(40, int(cfg.interaction.selection_drag_min_px or 9)))
         cfg.interaction.selection_click_pair_max_distance_px = max(4, min(40, int(cfg.interaction.selection_click_pair_max_distance_px or 14)))
