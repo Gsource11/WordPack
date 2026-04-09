@@ -4243,7 +4243,7 @@ class WordPackWebviewApp:
             if self.bubble_window is None or self._bubble_state.pinned:
                 return
         if self._cursor_distance_to_bubble(cursor_pos) > 0:
-            self.close_window("bubble")
+            self._close_bubble_with_restore_hint()
 
     def _cursor_distance_to_bubble(self, cursor_pos: tuple[int, int], *, edge_padding: int = 0) -> int:
         with self.lock:
@@ -4351,6 +4351,9 @@ class WordPackWebviewApp:
             }
 
     def _close_bubble_by_fast_leave(self) -> None:
+        self._close_bubble_with_restore_hint()
+
+    def _close_bubble_with_restore_hint(self) -> None:
         snapshot = self._capture_bubble_snapshot()
         if snapshot is not None:
             with self.lock:
@@ -4359,7 +4362,7 @@ class WordPackWebviewApp:
         self.close_window("bubble")
         restore_hotkey = normalize_shortcut(str(getattr(self.config.interaction, "bubble_restore_hotkey", "") or ""))
         if restore_hotkey:
-            self.set_status(f"气泡已关闭（可按 {restore_hotkey} 撤销）")
+            self.set_status(f"气泡已关闭（可按 {restore_hotkey} 恢复）")
         else:
             self.set_status("气泡已关闭")
 
