@@ -71,6 +71,19 @@ class SelectionCaptureService:
         self._uia_module = None
         self._uia_import_error = ""
 
+    def warmup(self) -> bool:
+        module = self._load_uiautomation()
+        if module is None:
+            return False
+        try:
+            focused_getter = getattr(module, "GetFocusedControl", None)
+            if callable(focused_getter):
+                focused_getter()
+            return True
+        except Exception as exc:
+            self._uia_import_error = f"{type(exc).__name__}: {exc}"
+            return False
+
     def capture(
         self,
         clipboard_capture: Callable[..., ClipboardCaptureResult],

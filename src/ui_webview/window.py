@@ -24,7 +24,7 @@ from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
 from src.native_screenshot_overlay import NativeScreenshotOverlay
 from src.ocr import ScreenshotOCRService
-from src.selection_capture import ClipboardCaptureResult, SelectionCaptureService
+from src.selection_capture import ClipboardCaptureResult, SelectionCaptureResult, SelectionCaptureService
 from src.screenshot import MIN_CAPTURE_SIZE, ScreenRegion, capture_screen_region
 from src.storage import HistoryStore
 from src.translator import TranslationService
@@ -215,6 +215,9 @@ class WordPackWebviewApp:
         self._main_compact = True
         self._webview2_hint_shown = False
         self._webview_started = False
+        self._selection_runtime_warmup_started = False
+        self._selection_runtime_warmup_ok = False
+        self._selection_runtime_warmup_done = threading.Event()
         self._tray_window_ready = False
         self._tray_window_shape_applied = False
         self._tray_window_popup_flags_applied = False
@@ -1009,6 +1012,7 @@ class WordPackWebviewApp:
                     self._main_compact = True
         except Exception:
             self.logger.exception("Failed to prepare main window on startup")
+        self._start_selection_runtime_warmup()
         self._start_input_polling()
         if self._should_probe_ai_on_startup():
             self._probe_ai_availability_async()
@@ -1019,6 +1023,42 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to start global hook services")
         self._start_bundled_model_import()
+
+    def _start_selection_runtime_warmup(self) -> None:
+        with self.lock:
+            if self._selection_runtime_warmup_started:
+                return
+            self._selection_runtime_warmup_started = True
+            self._selection_runtime_warmup_done.clear()
+
+        def worker() -> None:
+            ok = False
+            try:
+                ok = bool(self.selection_capture.warmup())
+            except Exception:
+                self.logger.exception("Selection runtime warmup failed")
+            finally:
+                with self.lock:
+                    self._selection_runtime_warmup_ok = bool(ok)
+                self._selection_runtime_warmup_done.set()
+            self.logger.info("Selection runtime warmup done ok=%s", bool(ok))
+
+        threading.Thread(
+            target=worker,
+            name="wordpack-runtime-warmup",
+            daemon=True,
+        ).start()
+
+    def _wait_selection_runtime_warmup(self, timeout_sec: float) -> None:
+        with self.lock:
+            started = bool(self._selection_runtime_warmup_started)
+            done = bool(self._selection_runtime_warmup_done.is_set())
+        if not started or done:
+            return
+        wait_sec = max(0.0, float(timeout_sec))
+        if wait_sec <= 0:
+            return
+        self._selection_runtime_warmup_done.wait(wait_sec)
 
     def _bundled_argos_model_manifest_path(self) -> Path:
         return self.data_dir / "bundled_argos_models_manifest.json"
@@ -2859,12 +2899,19 @@ class WordPackWebviewApp:
             self.logger.exception("Failed to clear screenshot background: %s", path)
 
     def start_screenshot_capture(self, show_bubble: bool) -> dict[str, Any]:
+        self.logger.info("Screenshot capture request received show_bubble=%s", bool(show_bubble))
         now = time.time()
         with self.lock:
             if self._screenshot_starting or self._screenshot_session is not None:
+                self.logger.info(
+                    "Screenshot capture ignored: already active starting=%s session=%s",
+                    bool(self._screenshot_starting),
+                    bool(self._screenshot_session is not None),
+                )
                 return {"ok": False, "message": "截图已在进行中"}
             # Deduplicate hotkey events fired by multiple hook threads.
             if (now - self._last_screenshot_trigger_at) < 0.45:
+                self.logger.info("Screenshot capture ignored: trigger dedup delta=%.3f", now - self._last_screenshot_trigger_at)
                 return {"ok": False, "message": "截图触发过快"}
             self._last_screenshot_trigger_at = now
             self._screenshot_starting = True
@@ -2893,6 +2940,7 @@ class WordPackWebviewApp:
                 image = capture_virtual_screen()
                 self._save_screenshot_background_image(image)
             except Exception as exc:
+                self.logger.exception("Screenshot capture failed while capturing virtual screen")
                 self._set_global_cursor_crosshair(False)
                 self._restore_main_after_screenshot(main_was_hidden=bool(main_hidden_before))
                 message = self._user_friendly_message(str(exc), scene="screenshot")
@@ -2921,7 +2969,14 @@ class WordPackWebviewApp:
                 )
                 if not overlay_ok:
                     raise RuntimeError("截图界面初始化失败，请重试")
+                self.logger.info(
+                    "Screenshot overlay shown session_id=%s cursor=(%s,%s)",
+                    int(session_id),
+                    int(cursor_x),
+                    int(cursor_y),
+                )
             except Exception as exc:
+                self.logger.exception("Screenshot capture failed while showing native overlay")
                 with self.lock:
                     session = self._screenshot_session
                     self._screenshot_session = None
@@ -3667,13 +3722,49 @@ class WordPackWebviewApp:
         self._set_selection_flow("triggered", reason="translate-start", candidate=candidate)
         return self._start_translate(text=text, action="划词翻译", show_bubble=True)
 
+    @staticmethod
+    def _is_transient_selection_failure(result: SelectionCaptureResult) -> bool:
+        if result.has_text():
+            return False
+        final_reason = str(result.reason or "").strip().lower()
+        uia_reason = str(result.uia_reason or "").strip().lower()
+        clipboard_reason = str(result.clipboard_reason or "").strip().lower()
+        transient_clipboard_reasons = {
+            "clipboard-empty",
+            "clipboard-unchanged",
+            "clipboard-copy-without-seq-change",
+        }
+        transient_uia_reasons = {
+            "empty-selection",
+            "no-textpattern",
+            "uia-module-missing",
+            "uia-module-import-failed",
+            "uia-internal-error",
+        }
+        if final_reason in transient_clipboard_reasons and uia_reason in transient_uia_reasons:
+            return True
+        if clipboard_reason in transient_clipboard_reasons and uia_reason in transient_uia_reasons:
+            return True
+        return False
+
     def _capture_selected_text(self, payload: dict[str, int] | None) -> str:
+        self._wait_selection_runtime_warmup(timeout_sec=0.9)
+
         result = self.selection_capture.capture(
             self._capture_selection_by_ctrl_c,
             payload=payload,
             wait_sec=0.1,
             allow_unchanged=True,
         )
+        if self._is_transient_selection_failure(result):
+            self.logger.info("Selection capture transient failure, retrying once | %s", result.diagnostics_summary())
+            time.sleep(0.06)
+            result = self.selection_capture.capture(
+                self._capture_selection_by_ctrl_c,
+                payload=payload,
+                wait_sec=0.12,
+                allow_unchanged=True,
+            )
         if result.has_text():
             self.logger.info(
                 "Selection capture success scheme=%s control=%s reason=%s",
@@ -3693,7 +3784,11 @@ class WordPackWebviewApp:
     ) -> ClipboardCaptureResult:
         from ctypes import windll
 
-        backup_text = get_clipboard_text(raw=True)
+        try:
+            backup_text = get_clipboard_text(raw=True)
+        except Exception:
+            self.logger.exception("Failed to read clipboard backup before Ctrl+C capture")
+            backup_text = None
         try:
             seq_before = int(windll.user32.GetClipboardSequenceNumber())
         except Exception:
@@ -3800,9 +3895,17 @@ class WordPackWebviewApp:
             return
 
         if event == "screenshot_translate":
+            screenshot_enabled = bool(self.config.interaction.screenshot_enabled)
+            screenshot_hotkey = normalize_shortcut(self.config.interaction.screenshot_hotkey)
+            self.logger.info(
+                "Hotkey event received event=screenshot_translate enabled=%s hotkey=%s session_active=%s",
+                screenshot_enabled,
+                screenshot_hotkey or "none",
+                bool(self._screenshot_session is not None),
+            )
             if self._screenshot_session is not None:
                 return
-            if self.config.interaction.screenshot_enabled and normalize_shortcut(self.config.interaction.screenshot_hotkey):
+            if screenshot_enabled and screenshot_hotkey:
                 self.start_screenshot_capture(show_bubble=True)
             return
 

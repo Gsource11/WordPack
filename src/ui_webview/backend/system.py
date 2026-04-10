@@ -23,6 +23,39 @@ kernel32 = windll.kernel32
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
+def _configure_winapi_signatures() -> None:
+    # Use pointer-sized signatures for clipboard/global-memory APIs.
+    # Without explicit arg/restype, ctypes defaults to c_int and can overflow on 64-bit handles.
+    try:
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.argtypes = []
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+    except Exception:
+        pass
+
+    try:
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.restype = wintypes.HGLOBAL
+    except Exception:
+        pass
+
+
+_configure_winapi_signatures()
+
+
 class POINT(Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
@@ -177,9 +210,9 @@ def get_clipboard_text(raw: bool = False) -> str | None:
 
     text: str | None = None
     try:
-        handle = int(user32.GetClipboardData(CF_UNICODETEXT))
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
         if handle:
-            ptr = int(kernel32.GlobalLock(handle))
+            ptr = kernel32.GlobalLock(handle)
             if ptr:
                 try:
                     text = wstring_at(ptr)
@@ -208,12 +241,12 @@ def set_clipboard_text(text: str | None) -> bool:
             if not bool(user32.EmptyClipboard()):
                 continue
 
-            hmem = int(kernel32.GlobalAlloc(GMEM_MOVEABLE, c_size_t(len(payload))))
-            if hmem == 0:
+            hmem = kernel32.GlobalAlloc(GMEM_MOVEABLE, c_size_t(len(payload)))
+            if not hmem:
                 continue
 
-            ptr = int(kernel32.GlobalLock(hmem))
-            if ptr == 0:
+            ptr = kernel32.GlobalLock(hmem)
+            if not ptr:
                 kernel32.GlobalFree(hmem)
                 continue
 

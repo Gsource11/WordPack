@@ -147,6 +147,20 @@ class HotkeyManager:
         self._shift_combo_used = False
         self._registered_hotkeys: list[int] = []
 
+    def _safe_callback(self, event: str, payload) -> None:
+        try:
+            self.callback(event, payload)
+        except Exception:
+            logger.exception("Hotkey callback failed event=%s", event)
+
+    def _dispatch_callback(self, event: str, payload) -> None:
+        threading.Thread(
+            target=self._safe_callback,
+            args=(event, payload),
+            name=f"wordpack-hotkey-{event}",
+            daemon=True,
+        ).start()
+
     def start(self) -> None:
         thread: threading.Thread | None
         with self._state_lock:
@@ -181,128 +195,134 @@ class HotkeyManager:
     def _loop(self) -> None:
         with self._state_lock:
             self._thread_id = kernel32.GetCurrentThreadId()
-        shortcut_map = {
-            "screenshot_translate": "",
-            "restore_bubble": "",
-            "toggle_main_window": "",
-        }
-        shortcut_map.update(self.shortcut_getter() or {})
+        try:
+            shortcut_map = {
+                "screenshot_translate": "",
+                "restore_bubble": "",
+                "toggle_main_window": "",
+            }
+            shortcut_map.update(self.shortcut_getter() or {})
 
-        for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
-            parsed = parse_shortcut(shortcut_map.get(event_name, ""))
-            if not parsed:
-                continue
-            modifiers, vk, label = parsed
-            if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
-                self._registered_hotkeys.append(hotkey_id)
-            else:
-                self.callback("status", f"全局热键注册失败：{label} 已被占用")
+            for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
+                parsed = parse_shortcut(shortcut_map.get(event_name, ""))
+                if not parsed:
+                    continue
+                modifiers, vk, label = parsed
+                if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                    self._registered_hotkeys.append(hotkey_id)
+                    logger.info("Registered hotkey %s", label)
+                else:
+                    self._safe_callback("status", f"全局热键注册失败：{label} 已被占用")
 
-        self._keyboard_proc = LowLevelKeyboardProc(self._keyboard_callback)
-        self._keyboard_hook = user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            self._keyboard_proc,
-            kernel32.GetModuleHandleW(None),
-            0,
-        )
-        if not self._keyboard_hook:
-            # Retry with null module handle for environments where binding to
-            # current module fails for low-level keyboard hook.
+            self._keyboard_proc = LowLevelKeyboardProc(self._keyboard_callback)
             self._keyboard_hook = user32.SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 self._keyboard_proc,
-                None,
+                kernel32.GetModuleHandleW(None),
                 0,
             )
-        if not self._keyboard_hook:
-            try:
-                err = int(kernel32.GetLastError())
-            except Exception:
-                err = -1
-            logger.warning("Keyboard hook install failed, last_error=%s", err)
+            if not self._keyboard_hook:
+                # Retry with null module handle for environments where binding to
+                # current module fails for low-level keyboard hook.
+                self._keyboard_hook = user32.SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    self._keyboard_proc,
+                    None,
+                    0,
+                )
+            if not self._keyboard_hook:
+                try:
+                    err = int(kernel32.GetLastError())
+                except Exception:
+                    err = -1
+                logger.warning("Keyboard hook install failed, last_error=%s", err)
 
-        msg = MSG()
-        while not self._stop_event.is_set():
-            code = user32.GetMessageW(byref(msg), None, 0, 0)
-            if code <= 0:
-                break
+            msg = MSG()
+            while not self._stop_event.is_set():
+                code = user32.GetMessageW(byref(msg), None, 0, 0)
+                if code <= 0:
+                    break
 
-            if msg.message == WM_HOTKEY:
-                event_name = HOTKEY_EVENT_MAP.get(int(msg.wParam))
-                if event_name:
-                    self.callback(event_name, None)
+                if msg.message == WM_HOTKEY:
+                    event_name = HOTKEY_EVENT_MAP.get(int(msg.wParam))
+                    if event_name:
+                        logger.info("Hotkey activated event=%s", event_name)
+                        self._dispatch_callback(event_name, None)
 
-            user32.TranslateMessage(byref(msg))
-            user32.DispatchMessageW(byref(msg))
-
-        if self._keyboard_hook:
-            user32.UnhookWindowsHookEx(self._keyboard_hook)
-            self._keyboard_hook = None
-        for hotkey_id in self._registered_hotkeys:
-            user32.UnregisterHotKey(None, hotkey_id)
-        self._registered_hotkeys.clear()
-        with self._state_lock:
-            if self._thread and (threading.current_thread() is self._thread):
-                self._thread = None
-            self._thread_id = 0
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
+        finally:
+            if self._keyboard_hook:
+                user32.UnhookWindowsHookEx(self._keyboard_hook)
+                self._keyboard_hook = None
+            for hotkey_id in self._registered_hotkeys:
+                user32.UnregisterHotKey(None, hotkey_id)
+            self._registered_hotkeys.clear()
+            with self._state_lock:
+                if self._thread and (threading.current_thread() is self._thread):
+                    self._thread = None
+                self._thread_id = 0
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
-        if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):
-            kb = cast(l_param, POINTER(KBDLLHOOKSTRUCT)).contents
-            is_key_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-            is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
-            is_alt = kb.vkCode in (VK_LMENU, VK_RMENU)
-            is_shift = kb.vkCode in (VK_LSHIFT, VK_RSHIFT)
+        try:
+            if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):
+                kb = cast(l_param, POINTER(KBDLLHOOKSTRUCT)).contents
+                is_key_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
+                is_alt = kb.vkCode in (VK_LMENU, VK_RMENU)
+                is_shift = kb.vkCode in (VK_LSHIFT, VK_RSHIFT)
 
-            if is_key_down and is_ctrl:
-                if not self._ctrl_pressed:
-                    self._ctrl_combo_used = False
-                self._ctrl_pressed.add(int(kb.vkCode))
-            elif is_key_down and not is_ctrl:
-                if self._ctrl_pressed:
-                    self._ctrl_combo_used = True
-            elif not is_key_down and is_ctrl:
-                self._ctrl_pressed.discard(int(kb.vkCode))
-                if not self._ctrl_pressed:
-                    if not self._ctrl_combo_used:
-                        now = time.time()
-                        if now - self._last_ctrl_at <= 0.35:
-                            self.callback("double_ctrl_selection", None)
-                        self._last_ctrl_at = now
-                    self._ctrl_combo_used = False
+                if is_key_down and is_ctrl:
+                    if not self._ctrl_pressed:
+                        self._ctrl_combo_used = False
+                    self._ctrl_pressed.add(int(kb.vkCode))
+                elif is_key_down and not is_ctrl:
+                    if self._ctrl_pressed:
+                        self._ctrl_combo_used = True
+                elif not is_key_down and is_ctrl:
+                    self._ctrl_pressed.discard(int(kb.vkCode))
+                    if not self._ctrl_pressed:
+                        if not self._ctrl_combo_used:
+                            now = time.time()
+                            if now - self._last_ctrl_at <= 0.35:
+                                self._dispatch_callback("double_ctrl_selection", None)
+                            self._last_ctrl_at = now
+                        self._ctrl_combo_used = False
 
-            if is_key_down and is_alt:
-                if not self._alt_pressed:
-                    self._alt_combo_used = False
-                self._alt_pressed.add(int(kb.vkCode))
-            elif is_key_down and not is_alt:
-                if self._alt_pressed:
-                    self._alt_combo_used = True
-            elif not is_key_down and is_alt:
-                self._alt_pressed.discard(int(kb.vkCode))
-                if not self._alt_pressed:
-                    if not self._alt_combo_used:
-                        now = time.time()
-                        if now - self._last_alt_at <= 0.35:
-                            self.callback("double_alt_selection", None)
-                        self._last_alt_at = now
-                    self._alt_combo_used = False
+                if is_key_down and is_alt:
+                    if not self._alt_pressed:
+                        self._alt_combo_used = False
+                    self._alt_pressed.add(int(kb.vkCode))
+                elif is_key_down and not is_alt:
+                    if self._alt_pressed:
+                        self._alt_combo_used = True
+                elif not is_key_down and is_alt:
+                    self._alt_pressed.discard(int(kb.vkCode))
+                    if not self._alt_pressed:
+                        if not self._alt_combo_used:
+                            now = time.time()
+                            if now - self._last_alt_at <= 0.35:
+                                self._dispatch_callback("double_alt_selection", None)
+                            self._last_alt_at = now
+                        self._alt_combo_used = False
 
-            if is_key_down and is_shift:
-                if not self._shift_pressed:
-                    self._shift_combo_used = False
-                self._shift_pressed.add(int(kb.vkCode))
-            elif is_key_down and not is_shift:
-                if self._shift_pressed:
-                    self._shift_combo_used = True
-            elif not is_key_down and is_shift:
-                self._shift_pressed.discard(int(kb.vkCode))
-                if not self._shift_pressed:
-                    if not self._shift_combo_used:
-                        now = time.time()
-                        if now - self._last_shift_at <= 0.35:
-                            self.callback("double_shift_selection", None)
-                        self._last_shift_at = now
-                    self._shift_combo_used = False
+                if is_key_down and is_shift:
+                    if not self._shift_pressed:
+                        self._shift_combo_used = False
+                    self._shift_pressed.add(int(kb.vkCode))
+                elif is_key_down and not is_shift:
+                    if self._shift_pressed:
+                        self._shift_combo_used = True
+                elif not is_key_down and is_shift:
+                    self._shift_pressed.discard(int(kb.vkCode))
+                    if not self._shift_pressed:
+                        if not self._shift_combo_used:
+                            now = time.time()
+                            if now - self._last_shift_at <= 0.35:
+                                self._dispatch_callback("double_shift_selection", None)
+                            self._last_shift_at = now
+                        self._shift_combo_used = False
+        except Exception:
+            logger.exception("Keyboard hook callback failed")
 
-        return user32.CallNextHookEx(self._keyboard_hook, n_code, w_param, l_param)
+        return user32.CallNextHookEx(self._keyboard_hook or 0, n_code, w_param, l_param)
