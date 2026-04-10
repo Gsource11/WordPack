@@ -4648,10 +4648,7 @@ class WordPackWebviewApp:
 
         VK_LBUTTON = 0x01
         VK_RBUTTON = 0x02
-        VK_CONTROL = 0x11
         VK_ESCAPE = 0x1B
-        VK_MENU = 0x12
-        VK_SHIFT = 0x10
 
         while not self._input_poll_stop.is_set():
             try:
@@ -4678,10 +4675,7 @@ class WordPackWebviewApp:
 
                 lbtn_down = bool(windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
                 rbtn_down = bool(windll.user32.GetAsyncKeyState(VK_RBUTTON) & 0x8000)
-                ctrl_down = bool(windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
                 escape_down = bool(windll.user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
-                alt_down = bool(windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000)
-                shift_down = bool(windll.user32.GetAsyncKeyState(VK_SHIFT) & 0x8000)
                 screenshot_session = self._screenshot_session
                 screenshot_active = screenshot_session is not None
                 screenshot_guard = screenshot_active or self._screenshot_starting or self._selection_events_suppressed(now)
@@ -4747,59 +4741,6 @@ class WordPackWebviewApp:
                     self._fb_lbtn_down_pos = None
                     self._fb_lbtn_down_at = 0.0
 
-                if (not screenshot_guard) and ctrl_down and not self._fb_last_ctrl_down:
-                    self._fb_ctrl_combo_used = False
-
-                if (not screenshot_guard) and ctrl_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
-                    self._fb_ctrl_combo_used = True
-
-                if (not screenshot_guard) and self._fb_last_ctrl_down and not ctrl_down:
-                    if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
-                        if self._can_trigger_selection_by_mode("double_ctrl") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
-                    if not self._fb_ctrl_combo_used:
-                        self._fb_last_ctrl_tap_at = now
-
-                if (not screenshot_guard) and alt_down and not self._fb_last_alt_down:
-                    self._fb_alt_combo_used = False
-
-                if (not screenshot_guard) and alt_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
-                    self._fb_alt_combo_used = True
-
-                if (not screenshot_guard) and self._fb_last_alt_down and not alt_down:
-                    if not self._fb_alt_combo_used and now - self._fb_last_alt_tap_at <= 0.35:
-                        if self._can_trigger_selection_by_mode("double_alt") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
-                    if not self._fb_alt_combo_used:
-                        self._fb_last_alt_tap_at = now
-
-                if (not screenshot_guard) and shift_down and not self._fb_last_shift_down:
-                    self._fb_shift_combo_used = False
-
-                if (not screenshot_guard) and shift_down and self._ctrl_combo_in_progress(windll.user32.GetAsyncKeyState):
-                    self._fb_shift_combo_used = True
-
-                if (not screenshot_guard) and self._fb_last_shift_down and not shift_down:
-                    if not self._fb_shift_combo_used and now - self._fb_last_shift_tap_at <= 0.35:
-                        if self._can_trigger_selection_by_mode("double_shift") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
-                    if not self._fb_shift_combo_used:
-                        self._fb_last_shift_tap_at = now
-
-                combo_s = False
-                if (not screenshot_guard) and self.config.interaction.screenshot_enabled:
-                    combo_s = self._shortcut_is_active(
-                        self.config.interaction.screenshot_hotkey,
-                        ctrl_down=ctrl_down,
-                        alt_down=alt_down,
-                        shift_down=shift_down,
-                        key_state_getter=windll.user32.GetAsyncKeyState,
-                    )
-                if combo_s and not self._fb_last_combo_s:
-                    if self.config.interaction.screenshot_hotkey:
-                        self.start_screenshot_capture(show_bubble=True)
-                self._fb_last_combo_s = combo_s
-
                 if screenshot_active:
                     should_cancel_session = bool(escape_down or (rbtn_down and not self._fb_last_rbtn_down))
                     if should_cancel_session and (now - self._screenshot_cancel_last_at) >= 0.12:
@@ -4819,9 +4760,6 @@ class WordPackWebviewApp:
 
                 self._fb_last_lbtn_down = lbtn_down
                 self._fb_last_rbtn_down = rbtn_down
-                self._fb_last_ctrl_down = ctrl_down
-                self._fb_last_alt_down = alt_down
-                self._fb_last_shift_down = shift_down
                 self._fb_last_escape_down = escape_down
             except Exception:
                 now = time.time()
