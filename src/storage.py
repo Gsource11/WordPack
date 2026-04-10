@@ -177,7 +177,8 @@ class HistoryStore:
             args.extend([keyword, keyword])
 
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-        order_sql = "ORDER BY favorite DESC, last_used_at DESC, id DESC"
+        # Keep "recent" stable by recency/use, do not promote favorites to top.
+        order_sql = "ORDER BY last_used_at DESC, id DESC"
         safe_limit = max(1, min(200, int(limit)))
         safe_offset = max(0, int(offset))
 
@@ -244,6 +245,12 @@ class HistoryStore:
                 """,
                 (int(record_id),),
             )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_record(self, record_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM history WHERE id = ?", (int(record_id),))
             conn.commit()
             return cur.rowcount > 0
 

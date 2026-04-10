@@ -56,6 +56,9 @@ class WindowApi:
     def use_history_record(self, record_id: int) -> dict[str, Any]:
         return self._controller.use_history_record(int(record_id))
 
+    def delete_history_record(self, record_id: int) -> dict[str, Any]:
+        return self._controller.delete_history_record(int(record_id))
+
     def load_settings(self) -> dict[str, Any]:
         return self._controller.get_settings_payload(probe_runtime=True)
 

@@ -1555,6 +1555,10 @@ class WordPackWebviewApp:
         ok = self.history.increment_use_count(record_id)
         return {"ok": bool(ok), "id": int(record_id)}
 
+    def delete_history_record(self, record_id: int) -> dict[str, Any]:
+        ok = self.history.delete_record(record_id)
+        return {"ok": bool(ok), "id": int(record_id)}
+
     def get_settings_payload(self, probe_runtime: bool = False) -> dict[str, Any]:
         dictionary_status = self.service.dictionary_status(probe=probe_runtime)
         dictionary_ready = bool(dictionary_status.get("runtime_ready", False))

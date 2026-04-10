@@ -50,6 +50,7 @@
     screenshotCancelHandler: null,
     screenshotInteractionCleanup: null,
     screenshotRenderToken: 0,
+    historyClearConfirm: false,
     historyPanel: {
       tab: "recent",
       q: "",
@@ -133,10 +134,11 @@
     return String(el?.textContent || "").trim();
   };
 
-  const copyTextWithFallback = async (value) => {
+  const copyTextWithFallback = async (value, options = {}) => {
+    const silent = Boolean(options && options.silent);
     const text = String(value ?? "");
     if (!text.trim()) {
-      showToast("warning", "没有可复制的内容");
+      if (!silent) showToast("warning", "没有可复制的内容");
       return false;
     }
 
@@ -148,7 +150,7 @@
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        showToast("success", "已复制到剪贴板");
+        if (!silent) showToast("success", "已复制到剪贴板");
         return true;
       }
     } catch (_err) {
@@ -167,14 +169,14 @@
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
       if (ok) {
-        showToast("success", "已复制到剪贴板");
+        if (!silent) showToast("success", "已复制到剪贴板");
         return true;
       }
     } catch (_err) {
       // no-op
     }
 
-    showToast("error", (resp && resp.message) ? String(resp.message) : "复制失败，请重试");
+    if (!silent) showToast("error", (resp && resp.message) ? String(resp.message) : "复制失败，请重试");
     return false;
   };
 
@@ -198,6 +200,12 @@
   const TRAY_BLUR_GUARD_MS = 260;
   let trayBlurGuardMs = TRAY_BLUR_GUARD_MS;
   let trayOpenedAtMs = 0;
+  let historyCopySourceFlashId = 0;
+  let historyCopyResultFlashId = 0;
+  let historyCopySourceFlashTimer = 0;
+  let historyCopyResultFlashTimer = 0;
+  let pendingHistoryDelete = null;
+  let pendingHistoryDeleteTimer = 0;
 
   const choiceGroupMarkup = (field, currentValue, options, valueType = "") => `
     <div class="choice-group">
@@ -847,6 +855,97 @@
     }, 4200);
   }
 
+  function clearHistoryCopyFlash(which) {
+    if (which === "source") {
+      historyCopySourceFlashId = 0;
+      if (historyCopySourceFlashTimer) {
+        window.clearTimeout(historyCopySourceFlashTimer);
+        historyCopySourceFlashTimer = 0;
+      }
+      return;
+    }
+    historyCopyResultFlashId = 0;
+    if (historyCopyResultFlashTimer) {
+      window.clearTimeout(historyCopyResultFlashTimer);
+      historyCopyResultFlashTimer = 0;
+    }
+  }
+
+  function markHistoryCopyFlash(which, id) {
+    const value = Number(id || 0);
+    if (which === "source") {
+      historyCopySourceFlashId = value;
+      if (historyCopySourceFlashTimer) window.clearTimeout(historyCopySourceFlashTimer);
+      historyCopySourceFlashTimer = window.setTimeout(() => {
+        historyCopySourceFlashId = 0;
+        historyCopySourceFlashTimer = 0;
+        rerender();
+      }, 800);
+      rerender();
+      return;
+    }
+    historyCopyResultFlashId = value;
+    if (historyCopyResultFlashTimer) window.clearTimeout(historyCopyResultFlashTimer);
+    historyCopyResultFlashTimer = window.setTimeout(() => {
+      historyCopyResultFlashId = 0;
+      historyCopyResultFlashTimer = 0;
+      rerender();
+    }, 800);
+    rerender();
+  }
+
+  async function commitPendingHistoryDelete() {
+    const pending = pendingHistoryDelete;
+    if (!pending) return;
+    pendingHistoryDelete = null;
+    if (pendingHistoryDeleteTimer) {
+      window.clearTimeout(pendingHistoryDeleteTimer);
+      pendingHistoryDeleteTimer = 0;
+    }
+    const resp = await apiCall("delete_history_record", Number(pending.id || 0));
+    if (!resp || !resp.ok) {
+      const restoreIndex = Math.max(0, Math.min(Number(pending.index || 0), state.historyPanel.items.length));
+      state.historyPanel.items.splice(restoreIndex, 0, pending.item);
+      state.historyPanel.total = Math.max(0, Number(state.historyPanel.total || 0) + 1);
+      showToast("error", "删除失败，请重试");
+      rerender();
+      return;
+    }
+    await loadHistory(true);
+  }
+
+  function queueHistoryDeleteUndo(item, index) {
+    if (pendingHistoryDelete) {
+      void commitPendingHistoryDelete();
+    }
+    pendingHistoryDelete = {
+      id: Number(item.id || 0),
+      item: clone(item),
+      index: Number(index || 0),
+    };
+    if (pendingHistoryDeleteTimer) {
+      window.clearTimeout(pendingHistoryDeleteTimer);
+    }
+    pendingHistoryDeleteTimer = window.setTimeout(() => {
+      pendingHistoryDeleteTimer = 0;
+      void commitPendingHistoryDelete();
+    }, 3000);
+  }
+
+  function undoPendingHistoryDelete() {
+    const pending = pendingHistoryDelete;
+    if (!pending) return;
+    pendingHistoryDelete = null;
+    if (pendingHistoryDeleteTimer) {
+      window.clearTimeout(pendingHistoryDeleteTimer);
+      pendingHistoryDeleteTimer = 0;
+    }
+    const restoreIndex = Math.max(0, Math.min(Number(pending.index || 0), state.historyPanel.items.length));
+    state.historyPanel.items.splice(restoreIndex, 0, pending.item);
+    state.historyPanel.total = Math.max(0, Number(state.historyPanel.total || 0) + 1);
+    rerender();
+  }
+
   function setTheme(themeMode) {
     state.themeMode = themeMode || "light";
     document.body.dataset.theme = state.themeMode;
@@ -1436,6 +1535,12 @@
     const toast = state.toast
       ? `<div class="global-toast ${escapeHtml(state.toast.type || "")}">${escapeHtml(state.toast.text || "")}</div>`
       : "";
+    const historyUndoBar = pendingHistoryDelete
+      ? `<div class="history-undo-bar"><span>已删除</span><button class="history-undo-btn" data-action="history-delete-undo">撤销</button></div>`
+      : "";
+    const historyClearBar = state.historyClearConfirm
+      ? `<div class="history-clear-bar"><span>确定清空本地历史记录吗？</span><button class="history-clear-btn" data-action="history-clear-cancel">取消</button><button class="history-clear-btn primary" data-action="history-clear-confirm">确定</button></div>`
+      : "";
     const mainCandidateState = candidateAvailability({
       mode,
       sourceText: state.sourceText,
@@ -1579,10 +1684,10 @@
                   <div class="history-text history-source">${escapeHtml((item.source_text || "").slice(0, 180))}</div>
                   <div class="history-text history-result">${escapeHtml((item.result_text || "").slice(0, 180))}</div>
                   <div class="history-actions">
-                    <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
-                    <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}">${icons.copy}</button>
-                    <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}">${icons.clipboard}</button>
-                    <button class="mini-button" data-action="history-refill" data-history-id="${item.id}">${icons.expand}</button>
+                    <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}" data-tooltip="${item.favorite ? "取消收藏" : "收藏"}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
+                    <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}" data-tooltip="复制原文">${historyCopySourceFlashId === Number(item.id) ? icons.check : icons.copy}</button>
+                    <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}" data-tooltip="复制译文">${historyCopyResultFlashId === Number(item.id) ? icons.check : icons.clipboard}</button>
+                    <button class="mini-button" data-action="history-delete" data-history-id="${item.id}" data-tooltip="删除">${icons.trash}</button>
                   </div>
                 </article>`).join("")}
               ${historyPanel.has_more ? `<button class="ghost-button history-load-more" data-action="history-load-more" ${historyPanel.loading ? "disabled" : ""}>${historyPanel.loading ? "加载中..." : "加载更多（50条）"}</button>` : ""}
@@ -1797,7 +1902,9 @@
           </div>
         </div>
       </section>
-      ${toast}`;
+      ${toast}
+      ${historyUndoBar}
+      ${historyClearBar}`;
 
     const textarea = document.getElementById("sourceText");
     if (textarea && textarea.value !== state.sourceText) {
@@ -2547,16 +2654,21 @@
         rerender();
         break;
       case "clear-history":
-        if (window.confirm("确定清空本地历史记录吗？")) {
-          await apiCall("clear_history", { scope: "all" });
-          await loadHistory(true);
-        }
+        state.historyClearConfirm = true;
+        rerender();
         break;
       case "clear-history-from-settings":
-        if (window.confirm("确定清空本地历史记录吗？")) {
-          await apiCall("clear_history", { scope: "all" });
-          await loadHistory(true);
-        }
+        state.historyClearConfirm = true;
+        rerender();
+        break;
+      case "history-clear-cancel":
+        state.historyClearConfirm = false;
+        rerender();
+        break;
+      case "history-clear-confirm":
+        state.historyClearConfirm = false;
+        await apiCall("clear_history", { scope: "all" });
+        await loadHistory(true);
         break;
       case "history-set-tab":
         state.historyPanel.tab = actionTarget.dataset.tab === "favorites" ? "favorites" : "recent";
@@ -2572,33 +2684,57 @@
           await loadHistory(false);
         }
         break;
+      case "history-delete-undo":
+        undoPendingHistoryDelete();
+        break;
       case "history-favorite": {
         const id = Number(actionTarget.dataset.historyId || "0");
         const favorite = String(actionTarget.dataset.favorite || "0") === "1";
         if (id > 0) {
-          await apiCall("toggle_history_favorite", id, favorite);
-          await loadHistory(true);
+          const index = state.historyPanel.items.findIndex((x) => Number(x.id) === id);
+          if (index < 0) break;
+          const row = state.historyPanel.items[index];
+          const prev = Boolean(row.favorite);
+          const resp = await apiCall("toggle_history_favorite", id, favorite);
+          if (!resp || resp.ok === false) {
+            state.historyPanel.items[index].favorite = prev;
+            rerender();
+            break;
+          }
+          if (state.historyPanel.tab === "favorites" && !favorite) {
+            state.historyPanel.items.splice(index, 1);
+            state.historyPanel.total = Math.max(0, Number(state.historyPanel.total || 0) - 1);
+          } else {
+            state.historyPanel.items[index].favorite = favorite;
+          }
+          rerender();
         }
         break;
       }
       case "history-copy-source":
-      case "history-copy-result":
-      case "history-refill": {
+      case "history-copy-result": {
         const id = Number(actionTarget.dataset.historyId || "0");
         const item = state.historyPanel.items.find((x) => Number(x.id) === id);
         if (!item) break;
         if (action === "history-copy-source") {
-          await copyTextWithFallback(item.source_text || "");
+          const ok = await copyTextWithFallback(item.source_text || "", { silent: true });
+          if (ok) markHistoryCopyFlash("source", id);
         } else if (action === "history-copy-result") {
-          await copyTextWithFallback(item.result_text || "");
-        } else {
-          state.sourceText = item.source_text || "";
-          state.resultText = item.result_text || "";
-          state.pending = false;
-          state.historyOpen = false;
-          await apiCall("use_history_record", id);
-          rerender();
+          const ok = await copyTextWithFallback(item.result_text || "", { silent: true });
+          if (ok) markHistoryCopyFlash("result", id);
         }
+        break;
+      }
+      case "history-delete": {
+        const id = Number(actionTarget.dataset.historyId || "0");
+        if (id <= 0) break;
+        const index = state.historyPanel.items.findIndex((x) => Number(x.id) === id);
+        if (index < 0) break;
+        const item = state.historyPanel.items[index];
+        state.historyPanel.items.splice(index, 1);
+        state.historyPanel.total = Math.max(0, Number(state.historyPanel.total || 0) - 1);
+        queueHistoryDeleteUndo(item, index);
+        rerender();
         break;
       }
       case "toggle-pin":
