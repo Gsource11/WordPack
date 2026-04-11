@@ -146,9 +146,6 @@ class HotkeyManager:
         self._shift_pressed: set[int] = set()
         self._shift_combo_used = False
         self._registered_hotkeys: list[int] = []
-        self._screenshot_shortcut_vk = 0
-        self._screenshot_shortcut_modifiers = 0
-        self._screenshot_fallback_down = False
 
     def _safe_callback(self, event: str, payload) -> None:
         try:
@@ -206,14 +203,6 @@ class HotkeyManager:
             }
             shortcut_map.update(self.shortcut_getter() or {})
 
-            screenshot_parsed = parse_shortcut(shortcut_map.get("screenshot_translate", ""))
-            if screenshot_parsed:
-                self._screenshot_shortcut_modifiers = int(screenshot_parsed[0])
-                self._screenshot_shortcut_vk = int(screenshot_parsed[1])
-            else:
-                self._screenshot_shortcut_modifiers = 0
-                self._screenshot_shortcut_vk = 0
-
             for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
                 parsed = parse_shortcut(shortcut_map.get(event_name, ""))
                 if not parsed:
@@ -269,31 +258,16 @@ class HotkeyManager:
             for hotkey_id in self._registered_hotkeys:
                 user32.UnregisterHotKey(None, hotkey_id)
             self._registered_hotkeys.clear()
-            self._screenshot_fallback_down = False
             with self._state_lock:
                 if self._thread and (threading.current_thread() is self._thread):
                     self._thread = None
                 self._thread_id = 0
-
-    @staticmethod
-    def _modifiers_active(modifiers: int) -> bool:
-        if modifiers & MOD_CONTROL:
-            if not bool(user32.GetAsyncKeyState(0x11) & 0x8000):
-                return False
-        if modifiers & MOD_ALT:
-            if not bool(user32.GetAsyncKeyState(0x12) & 0x8000):
-                return False
-        if modifiers & MOD_SHIFT:
-            if not bool(user32.GetAsyncKeyState(0x10) & 0x8000):
-                return False
-        return True
 
     def _keyboard_callback(self, n_code: int, w_param: int, l_param: int) -> int:
         try:
             if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):
                 kb = cast(l_param, POINTER(KBDLLHOOKSTRUCT)).contents
                 is_key_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                vk_code = int(kb.vkCode)
                 is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
                 is_alt = kb.vkCode in (VK_LMENU, VK_RMENU)
                 is_shift = kb.vkCode in (VK_LSHIFT, VK_RSHIFT)
@@ -348,17 +322,6 @@ class HotkeyManager:
                                 self._dispatch_callback("double_shift_selection", None)
                             self._last_shift_at = now
                         self._shift_combo_used = False
-
-                if self._screenshot_shortcut_vk > 0 and vk_code == int(self._screenshot_shortcut_vk):
-                    if is_key_down:
-                        if (not self._screenshot_fallback_down) and self._modifiers_active(self._screenshot_shortcut_modifiers):
-                            self._screenshot_fallback_down = True
-                            logger.info("Hotkey activated via keyboard hook fallback event=screenshot_translate")
-                            self._dispatch_callback("screenshot_translate", None)
-                    else:
-                        self._screenshot_fallback_down = False
-                elif (not is_key_down) and (is_ctrl or is_alt or is_shift):
-                    self._screenshot_fallback_down = False
         except Exception:
             logger.exception("Keyboard hook callback failed")
 
