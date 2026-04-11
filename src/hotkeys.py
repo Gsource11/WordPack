@@ -146,6 +146,9 @@ class HotkeyManager:
         self._shift_pressed: set[int] = set()
         self._shift_combo_used = False
         self._registered_hotkeys: list[int] = []
+        self._configured_hotkeys: dict[str, tuple[int, int, str]] = {}
+        self._hook_active_events: set[str] = set()
+        self._last_hotkey_event_at: dict[str, float] = {}
 
     def _safe_callback(self, event: str, payload) -> None:
         try:
@@ -160,6 +163,56 @@ class HotkeyManager:
             name=f"wordpack-hotkey-{event}",
             daemon=True,
         ).start()
+
+    def _emit_hotkey_event(self, event: str, *, source: str) -> None:
+        now = time.time()
+        last_at = float(self._last_hotkey_event_at.get(event, 0.0) or 0.0)
+        if (now - last_at) < 0.25:
+            logger.info(
+                "Hotkey duplicate suppressed event=%s source=%s delta=%.3f",
+                event,
+                source,
+                now - last_at,
+            )
+            return
+        self._last_hotkey_event_at[event] = now
+        logger.info("Hotkey activated event=%s source=%s", event, source)
+        self._dispatch_callback(event, None)
+
+    def _current_modifier_mask(self) -> int:
+        modifiers = 0
+        if self._ctrl_pressed:
+            modifiers |= MOD_CONTROL
+        if self._alt_pressed:
+            modifiers |= MOD_ALT
+        if self._shift_pressed:
+            modifiers |= MOD_SHIFT
+        return modifiers
+
+    def _handle_hook_hotkeys(self, vk_code: int, *, is_key_down: bool) -> None:
+        configured_hotkeys = self._configured_hotkeys
+        if not configured_hotkeys:
+            return
+        if not is_key_down:
+            for event_name, (_modifiers, key_vk, _label) in configured_hotkeys.items():
+                if int(key_vk) == int(vk_code):
+                    self._hook_active_events.discard(event_name)
+            return
+
+        if vk_code in (VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LSHIFT, VK_RSHIFT):
+            return
+
+        active_modifiers = self._current_modifier_mask()
+        for event_name, (modifiers, key_vk, _label) in configured_hotkeys.items():
+            if int(key_vk) != int(vk_code):
+                continue
+            if int(modifiers) != int(active_modifiers):
+                self._hook_active_events.discard(event_name)
+                continue
+            if event_name in self._hook_active_events:
+                continue
+            self._hook_active_events.add(event_name)
+            self._emit_hotkey_event(event_name, source="low_level_hook")
 
     def start(self) -> None:
         thread: threading.Thread | None
@@ -202,12 +255,16 @@ class HotkeyManager:
                 "toggle_main_window": "",
             }
             shortcut_map.update(self.shortcut_getter() or {})
+            self._configured_hotkeys = {}
+            self._hook_active_events.clear()
+            self._last_hotkey_event_at.clear()
 
             for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
                 parsed = parse_shortcut(shortcut_map.get(event_name, ""))
                 if not parsed:
                     continue
                 modifiers, vk, label = parsed
+                self._configured_hotkeys[event_name] = (modifiers, vk, label)
                 if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
                     self._registered_hotkeys.append(hotkey_id)
                     logger.info("Registered hotkey %s", label)
@@ -246,8 +303,7 @@ class HotkeyManager:
                 if msg.message == WM_HOTKEY:
                     event_name = HOTKEY_EVENT_MAP.get(int(msg.wParam))
                     if event_name:
-                        logger.info("Hotkey activated event=%s", event_name)
-                        self._dispatch_callback(event_name, None)
+                        self._emit_hotkey_event(event_name, source="wm_hotkey")
 
                 user32.TranslateMessage(byref(msg))
                 user32.DispatchMessageW(byref(msg))
@@ -258,6 +314,9 @@ class HotkeyManager:
             for hotkey_id in self._registered_hotkeys:
                 user32.UnregisterHotKey(None, hotkey_id)
             self._registered_hotkeys.clear()
+            self._configured_hotkeys.clear()
+            self._hook_active_events.clear()
+            self._last_hotkey_event_at.clear()
             with self._state_lock:
                 if self._thread and (threading.current_thread() is self._thread):
                     self._thread = None
@@ -280,8 +339,9 @@ class HotkeyManager:
                     if self._ctrl_pressed:
                         self._ctrl_combo_used = True
                 elif not is_key_down and is_ctrl:
+                    had_ctrl_pressed = bool(self._ctrl_pressed)
                     self._ctrl_pressed.discard(int(kb.vkCode))
-                    if not self._ctrl_pressed:
+                    if had_ctrl_pressed and not self._ctrl_pressed:
                         if not self._ctrl_combo_used:
                             now = time.time()
                             if now - self._last_ctrl_at <= 0.35:
@@ -297,8 +357,9 @@ class HotkeyManager:
                     if self._alt_pressed:
                         self._alt_combo_used = True
                 elif not is_key_down and is_alt:
+                    had_alt_pressed = bool(self._alt_pressed)
                     self._alt_pressed.discard(int(kb.vkCode))
-                    if not self._alt_pressed:
+                    if had_alt_pressed and not self._alt_pressed:
                         if not self._alt_combo_used:
                             now = time.time()
                             if now - self._last_alt_at <= 0.35:
@@ -314,14 +375,17 @@ class HotkeyManager:
                     if self._shift_pressed:
                         self._shift_combo_used = True
                 elif not is_key_down and is_shift:
+                    had_shift_pressed = bool(self._shift_pressed)
                     self._shift_pressed.discard(int(kb.vkCode))
-                    if not self._shift_pressed:
+                    if had_shift_pressed and not self._shift_pressed:
                         if not self._shift_combo_used:
                             now = time.time()
                             if now - self._last_shift_at <= 0.35:
                                 self._dispatch_callback("double_shift_selection", None)
                             self._last_shift_at = now
                         self._shift_combo_used = False
+
+                self._handle_hook_hotkeys(int(kb.vkCode), is_key_down=is_key_down)
         except Exception:
             logger.exception("Keyboard hook callback failed")
 

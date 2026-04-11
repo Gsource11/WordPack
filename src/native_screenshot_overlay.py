@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import ctypes
 import io
 import threading
 from typing import Callable
+
+from ctypes import wintypes
+
+
+user32 = ctypes.windll.user32
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_SHOWWINDOW = 0x0040
+HWND_TOPMOST = -1
+
+
+def _coerce_handle_int(value) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except Exception:
+        pass
+    to_int64 = getattr(value, "ToInt64", None)
+    if callable(to_int64):
+        try:
+            return int(to_int64())
+        except Exception:
+            pass
+    try:
+        return int(str(value).strip() or "0")
+    except Exception:
+        return 0
 
 
 class NativeScreenshotOverlay:
@@ -159,6 +188,13 @@ class NativeScreenshotOverlay:
             self._bootstrap_dotnet()
             from System.Windows.Forms import Application, ApplicationContext  # type: ignore[import-not-found]
             form = _NativeScreenshotForm(owner=self)
+            # Create the WinForms handle on the dedicated STA thread before the
+            # form is shared with worker threads. Without a handle,
+            # InvokeRequired reports False across threads, so begin_session()
+            # can incorrectly call Show/Focus on the hotkey thread. That leaves
+            # the screenshot session marked active while the overlay never
+            # becomes an interactive topmost window.
+            _ = form.native_form.Handle
             context = ApplicationContext()
             with self._lock:
                 self._form = form
@@ -186,6 +222,13 @@ class NativeScreenshotOverlay:
             if bool(getattr(form, "IsDisposed", False)):
                 return False
         except Exception:
+            return False
+        try:
+            handle_created = bool(getattr(form, "IsHandleCreated", False))
+        except Exception:
+            handle_created = False
+        if not handle_created:
+            self._logger.error("Native screenshot overlay action rejected: form handle not created")
             return False
         try:
             invoke_required = bool(getattr(form, "InvokeRequired", False))
@@ -366,7 +409,22 @@ class _NativeScreenshotForm:
             self._form.Focus()
         except Exception:
             pass
+        try:
+            hwnd = _coerce_handle_int(getattr(self._form, "Handle", None))
+            if hwnd > 0:
+                user32.SetWindowPos(
+                    wintypes.HWND(hwnd),
+                    wintypes.HWND(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                )
+        except Exception:
+            self._owner._logger.exception("Failed to apply topmost window position for native screenshot overlay")
         self._form.Invalidate()
+        self._form.Update()
 
     def end_session(self, *, dispose_bitmap: bool) -> None:
         self._session_active = False
