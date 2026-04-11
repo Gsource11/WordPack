@@ -3,7 +3,7 @@
 import threading
 import time
 import logging
-from ctypes import POINTER, WINFUNCTYPE, Structure, byref, cast, c_void_p, windll
+from ctypes import POINTER, WINFUNCTYPE, Structure, byref, cast, c_int, c_void_p, windll
 from ctypes import wintypes
 from typing import Callable
 
@@ -124,6 +124,27 @@ class KBDLLHOOKSTRUCT(Structure):
 
 
 LowLevelKeyboardProc = WINFUNCTYPE(wintypes.LPARAM, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
+
+
+def _configure_winapi_signatures() -> None:
+    try:
+        user32.SetWindowsHookExW.argtypes = [c_int, LowLevelKeyboardProc, wintypes.HINSTANCE, wintypes.DWORD]
+        user32.SetWindowsHookExW.restype = wintypes.HHOOK
+        user32.CallNextHookEx.argtypes = [wintypes.HHOOK, c_int, wintypes.WPARAM, wintypes.LPARAM]
+        user32.CallNextHookEx.restype = wintypes.LPARAM
+        user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [POINTER(MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user32.GetMessageW.restype = wintypes.BOOL
+        user32.TranslateMessage.argtypes = [POINTER(MSG)]
+        user32.TranslateMessage.restype = wintypes.BOOL
+        user32.DispatchMessageW.argtypes = [POINTER(MSG)]
+        user32.DispatchMessageW.restype = wintypes.LPARAM
+    except Exception:
+        logger.exception("Failed to configure WinAPI signatures for hotkeys")
+
+
+_configure_winapi_signatures()
 
 
 class HotkeyManager:
@@ -388,5 +409,8 @@ class HotkeyManager:
                 self._handle_hook_hotkeys(int(kb.vkCode), is_key_down=is_key_down)
         except Exception:
             logger.exception("Keyboard hook callback failed")
-
-        return user32.CallNextHookEx(self._keyboard_hook or 0, n_code, w_param, l_param)
+        try:
+            return int(user32.CallNextHookEx(self._keyboard_hook or 0, n_code, w_param, l_param))
+        except Exception:
+            logger.exception("CallNextHookEx failed in keyboard callback; fall back to pass-through")
+            return 0
