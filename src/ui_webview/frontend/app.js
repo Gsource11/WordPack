@@ -42,6 +42,8 @@
     toast: null,
     shortcuts: [],
     bubble: null,
+    bubbleBootstrapped: initialView !== "bubble",
+    bubbleEnterPending: false,
     trayMenu: null,
     bubbleCandidatePaneOpen: false,
     triggerMode: "click",
@@ -187,6 +189,38 @@
       <span class="skeleton-line w-74"></span>
       <span class="skeleton-line w-58"></span>
     </div>`;
+
+  function bubbleResultMarkup(bubble) {
+    const resultText = String(bubble?.result_text || "");
+    if (Boolean(bubble?.pending) && !resultText) {
+      return skeletonMarkup("bubble");
+    }
+    if (resultText) {
+      return escapeHtml(resultText);
+    }
+    const hasSourceText = Boolean(String(bubble?.source_text || "").trim());
+    if (hasSourceText && !Boolean(bubble?.pending)) {
+      return `<span class="bubble-empty-result">暂无结果</span>`;
+    }
+    return "";
+  }
+
+  function bubbleBootstrapMarkup() {
+    return `
+      <div class="bubble-shell bubble-preboot">
+        <section class="bubble-card">
+          <div class="bubble-content bubble-content-single">
+            <div class="bubble-workbench">
+              <div class="bubble-stack bubble-stack-result bubble-stack-only">
+                <div class="bubble-result pending-waiting">
+                  <div class="bubble-result-scroll" data-autoscroll="bubble-result">${skeletonMarkup("bubble")}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>`;
+  }
 
   const scrollFollowState = {
     "main-result": true,
@@ -1913,6 +1947,12 @@
   }
 
   function renderBubble() {
+    if (!state.bubbleBootstrapped) {
+      root.innerHTML = bubbleBootstrapMarkup();
+      return;
+    }
+    const bubbleEnterClass = state.bubbleEnterPending ? "bubble-enter" : "";
+    state.bubbleEnterPending = false;
     const bubble = state.bubble || {
       source_text: "",
       result_text: "",
@@ -1924,7 +1964,7 @@
     };
     const mode = bubble.mode || "dictionary";
     const bubbleResultClass = bubble.pending ? ((bubble.result_text || "") ? "pending-streaming" : "pending-waiting") : "";
-    const bubbleResultContent = bubble.pending && !bubble.result_text ? skeletonMarkup("bubble") : escapeHtml(bubble.result_text || "暂无结果");
+    const bubbleResultContent = bubbleResultMarkup(bubble);
     const bubbleCandidateItems = Array.isArray(bubble.candidate_items) ? bubble.candidate_items : [];
     const bubbleCandidateState = candidateAvailability({
       mode,
@@ -1947,7 +1987,7 @@
       </div>
     `).join("");
     root.innerHTML = `
-      <div class="bubble-shell">
+      <div class="bubble-shell ${bubbleEnterClass}">
         <section class="bubble-card">
           <div class="panel-drag-hitbox" data-drag-handle="bubble-top"></div>
           <header class="bubble-header" data-drag-handle="bubble-header">
@@ -2126,6 +2166,7 @@
 
   function patchBubbleDynamic() {
     if (state.view !== "bubble") return false;
+    if (!state.bubbleBootstrapped) return false;
     const label = document.querySelector(".bubble-result-label");
     const result = document.querySelector(".bubble-result");
     const pin = document.querySelector(".bubble-pin");
@@ -2136,9 +2177,7 @@
     label.textContent = "";
     const resultScroll = result.querySelector(".bubble-result-scroll");
     if (!resultScroll) return false;
-    resultScroll.innerHTML = state.bubble.pending && !state.bubble.result_text
-      ? skeletonMarkup("bubble")
-      : escapeHtml(state.bubble.result_text || "暂无结果");
+    resultScroll.innerHTML = bubbleResultMarkup(state.bubble);
     result.classList.toggle("pending-streaming", Boolean(state.bubble.pending && state.bubble.result_text));
     result.classList.toggle("pending-waiting", Boolean(state.bubble.pending && !state.bubble.result_text));
     pin.classList.toggle("active", Boolean(state.bubble.pinned));
@@ -2987,6 +3026,10 @@
         break;
       case "bubble-updated":
         {
+          if (state.view === "bubble" && !state.bubbleBootstrapped) {
+            state.bubbleBootstrapped = true;
+            state.bubbleEnterPending = true;
+          }
           const prevSource = String(state.bubble?.source_text || "");
           const nextBubble = payload.bubble || state.bubble;
           state.bubble = nextBubble;
@@ -3228,6 +3271,10 @@
     const payload = await apiCall("bootstrap");
     if (!payload) return;
     applyBootstrap(payload);
+    if (state.view === "bubble" && !state.bubbleBootstrapped) {
+      state.bubbleBootstrapped = true;
+      state.bubbleEnterPending = true;
+    }
     rerender();
     if (state.view === "bubble") {
       const settingsPayload = await apiCall("load_settings");

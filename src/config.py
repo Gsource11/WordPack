@@ -1,8 +1,14 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -124,8 +130,19 @@ class ConfigStore:
             self.save(cfg)
             return cfg
 
-        with self.config_path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
+        try:
+            with self.config_path.open("r", encoding="utf-8") as f:
+                text = f.read()
+            if not text.strip():
+                raise ValueError("config file is empty")
+            raw = json.loads(text)
+            if not isinstance(raw, dict):
+                raise ValueError("config root must be an object")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            self._backup_invalid_config(exc)
+            cfg = AppConfig()
+            self.save(cfg)
+            return cfg
 
         openai_raw = raw.get("openai", {})
         dictionary_raw = raw.get("dictionary", {})
@@ -258,7 +275,42 @@ class ConfigStore:
 
         return cfg
 
+    def _backup_invalid_config(self, error: BaseException) -> None:
+        try:
+            if not self.config_path.exists():
+                return
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_path = self.config_path.with_name(
+                f"{self.config_path.stem}.broken-{stamp}{self.config_path.suffix}"
+            )
+            try:
+                self.config_path.replace(backup_path)
+            except Exception:
+                pass
+            logger.warning("Invalid config detected (%s), fallback to default config", error)
+        except Exception:
+            pass
+
     def save(self, config: AppConfig) -> None:
         config.translation_mode = self._normalize_translation_mode(config.translation_mode)
-        with self.config_path.open("w", encoding="utf-8") as f:
-            json.dump(asdict(config), f, ensure_ascii=False, indent=2)
+        payload = asdict(config)
+        tmp_path = self.config_path.with_name(f"{self.config_path.name}.tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8", newline="\n") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            tmp_path.replace(self.config_path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                with self.config_path.open("w", encoding="utf-8", newline="\n") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            except Exception as exc:
+                logger.warning("Failed to persist config (%s), continue with in-memory config", exc)

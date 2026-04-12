@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import webview
 
-from src.app_logging import APP_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
+from src.app_logging import APP_RUNTIME_DIR, APP_USER_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
 from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore, SelectionAppProfile
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
@@ -77,7 +77,12 @@ class WordPackWebviewApp:
             bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
             exe_dir = Path(sys.executable).resolve().parent
             self.base_dir = bundle_root
-            legacy_data_candidates = [LEGACY_USER_DIR / "data", exe_dir.parent / "data", exe_dir / "data"]
+            legacy_data_candidates = [
+                APP_USER_RUNTIME_DIR,
+                LEGACY_USER_DIR / "data",
+                exe_dir.parent / "data",
+                exe_dir / "data",
+            ]
         else:
             self.base_dir = Path(__file__).resolve().parent.parent.parent
             legacy_data_candidates = [LEGACY_USER_DIR / "data", self.base_dir / "data"]
@@ -207,6 +212,7 @@ class WordPackWebviewApp:
         self._fb_last_shift_tap_at = 0.0
         self._fb_last_combo_s = False
         self._last_selection_trigger_at = 0.0
+        self._last_selection_translate_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
         self._dpi_scale_cache = 1.0
         self._dpi_scale_cached_at = 0.0
@@ -227,14 +233,26 @@ class WordPackWebviewApp:
         self._tray_show_ticket = 0
 
     def _resolve_data_dir(self, legacy_candidates: list[Path]) -> Path:
+        def ensure_writable_dir(path: Path) -> bool:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                probe = path / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return True
+            except Exception:
+                return False
+
         def first_legacy_dir() -> Path:
             for item in legacy_candidates:
                 try:
                     candidate = Path(item)
-                    candidate.mkdir(parents=True, exist_ok=True)
-                    return candidate
+                    if ensure_writable_dir(candidate):
+                        return candidate
                 except Exception:
                     continue
+            if ensure_writable_dir(APP_USER_RUNTIME_DIR):
+                return APP_USER_RUNTIME_DIR
             fallback = self.base_dir / "data"
             fallback.mkdir(parents=True, exist_ok=True)
             return fallback
@@ -242,14 +260,13 @@ class WordPackWebviewApp:
         override_raw = str(os.environ.get("WORDPACK_DATA_DIR") or "").strip()
         if override_raw:
             override = Path(override_raw).expanduser()
-            override.mkdir(parents=True, exist_ok=True)
-            return override
+            if ensure_writable_dir(override):
+                return override
+            self.logger.warning("WORDPACK_DATA_DIR not writable, fallback to default strategy: %s", override)
 
         shared = APP_RUNTIME_DIR
-        try:
-            shared.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            self.logger.warning("Shared data dir unavailable (%s), fallback to legacy: %s", exc, shared)
+        if not ensure_writable_dir(shared):
+            self.logger.warning("Shared data dir unavailable, fallback to legacy: %s", shared)
             return first_legacy_dir()
         if (shared / "config.json").exists() or (shared / "history.db").exists():
             return shared
@@ -3955,7 +3972,7 @@ class WordPackWebviewApp:
                 "double_shift_selection": "double_shift",
             }.get(str(event), "double_ctrl")
             if self._can_trigger_selection_by_mode(trigger_event_mode) and not self._is_our_window_foreground():
-                self._translate_pending_selection()
+                self._trigger_selection_translate_debounced(source=f"hook:{event}")
             return
 
         if event == "selection_mouse_up":
@@ -3986,6 +4003,24 @@ class WordPackWebviewApp:
         if event == "toggle_main_window":
             self.toggle_main_window_visibility()
             return
+
+    def _selection_translate_trigger_allowed(self, *, min_interval_sec: float = 0.32) -> bool:
+        now = time.time()
+        with self.lock:
+            last = float(getattr(self, "_last_selection_translate_trigger_at", 0.0) or 0.0)
+            if (now - last) < max(0.08, float(min_interval_sec)):
+                return False
+            self._last_selection_translate_trigger_at = now
+        return True
+
+    def _trigger_selection_translate_debounced(self, *, source: str) -> None:
+        if not self._selection_translate_trigger_allowed():
+            self.logger.info("Selection translate trigger suppressed by debounce source=%s", source)
+            return
+        try:
+            self._translate_pending_selection()
+        except Exception:
+            self.logger.exception("Selection translate trigger failed source=%s", source)
 
     def _handle_selection_candidate(self, candidate: SelectionCandidate) -> None:
         if self._screenshot_session is not None:
@@ -4828,7 +4863,7 @@ class WordPackWebviewApp:
                 if (not screenshot_guard) and self._fb_last_ctrl_down and not ctrl_down:
                     if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
                         if self._can_trigger_selection_by_mode("double_ctrl") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
+                            self._trigger_selection_translate_debounced(source="poll:double_ctrl")
                     if not self._fb_ctrl_combo_used:
                         self._fb_last_ctrl_tap_at = now
 
@@ -4841,7 +4876,7 @@ class WordPackWebviewApp:
                 if (not screenshot_guard) and self._fb_last_alt_down and not alt_down:
                     if not self._fb_alt_combo_used and now - self._fb_last_alt_tap_at <= 0.35:
                         if self._can_trigger_selection_by_mode("double_alt") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
+                            self._trigger_selection_translate_debounced(source="poll:double_alt")
                     if not self._fb_alt_combo_used:
                         self._fb_last_alt_tap_at = now
 
@@ -4854,7 +4889,7 @@ class WordPackWebviewApp:
                 if (not screenshot_guard) and self._fb_last_shift_down and not shift_down:
                     if not self._fb_shift_combo_used and now - self._fb_last_shift_tap_at <= 0.35:
                         if self._can_trigger_selection_by_mode("double_shift") and not self._is_our_window_foreground():
-                            self._translate_pending_selection()
+                            self._trigger_selection_translate_debounced(source="poll:double_shift")
                     if not self._fb_shift_combo_used:
                         self._fb_last_shift_tap_at = now
 

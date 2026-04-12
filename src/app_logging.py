@@ -1,18 +1,55 @@
 ﻿from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 from datetime import datetime
 from pathlib import Path
 
-def _resolve_runtime_data_dir() -> Path:
+def _resolve_user_runtime_data_dir() -> Path:
+    local_app_data = str(os.environ.get("LOCALAPPDATA") or "").strip()
+    if local_app_data:
+        return Path(local_app_data) / "WordPack" / "data"
+    return Path.home() / "AppData" / "Local" / "WordPack" / "data"
+
+
+def _resolve_install_runtime_data_dir() -> Path:
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        return exe_dir / "data"
+        return Path(sys.executable).resolve().parent / "data"
     return Path(__file__).resolve().parent.parent / "data"
 
 
+def _is_writable_dir(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_runtime_data_dir() -> Path:
+    override_raw = str(os.environ.get("WORDPACK_DATA_DIR") or "").strip()
+    if override_raw:
+        return Path(override_raw).expanduser()
+
+    preferred = _resolve_install_runtime_data_dir()
+    if not getattr(sys, "frozen", False):
+        return preferred
+    if _is_writable_dir(preferred):
+        return preferred
+
+    fallback = _resolve_user_runtime_data_dir()
+    if _is_writable_dir(fallback):
+        return fallback
+    return fallback
+
+
+APP_USER_RUNTIME_DIR = _resolve_user_runtime_data_dir()
+APP_INSTALL_RUNTIME_DIR = _resolve_install_runtime_data_dir()
 APP_RUNTIME_DIR = _resolve_runtime_data_dir()
 LEGACY_USER_DIR = Path.home() / ".wordpack"
 LOG_DIR = APP_RUNTIME_DIR / "logs"

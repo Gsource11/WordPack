@@ -1930,6 +1930,10 @@ body[data-theme="dark"] .app-tooltip {
   overflow: hidden;
 }
 
+.bubble-shell.bubble-enter .bubble-card {
+  animation: bubble-enter-fade 140ms ease-out both;
+}
+
 .bubble-card {
   width: 100%;
   min-height: 0;
@@ -1944,6 +1948,23 @@ body[data-theme="dark"] .app-tooltip {
   backdrop-filter: blur(22px);
   box-shadow: var(--shadow-panel);
   position: relative;
+}
+
+@keyframes bubble-enter-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.992);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble-shell.bubble-enter .bubble-card {
+    animation: none;
+  }
 }
 
 body.view-bubble .bubble-card {
@@ -2246,6 +2267,12 @@ body.view-main .icon-button.disabled {
   scrollbar-gutter: stable;
 }
 
+.bubble-empty-result {
+  display: block;
+  color: #5a687a;
+  font-weight: 600;
+}
+
 .bubble-result {
   border: 1px solid #efad5c;
   background: #efe6d9;
@@ -2539,6 +2566,10 @@ body[data-theme="dark"].view-bubble .bubble-result {
   border-color: #6b4a25;
   background: #2b2218;
   color: #f3f6fa;
+}
+
+body[data-theme="dark"].view-bubble .bubble-empty-result {
+  color: #c8d4e4;
 }
 
 body[data-theme="dark"].view-bubble .bubble-candidate-item {

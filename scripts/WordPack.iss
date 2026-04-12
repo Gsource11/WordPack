@@ -60,6 +60,7 @@ english.WebView2InstallFailedMsg=WebView2 installation did not complete.%n%nYou 
 english.WebView2MissingAfterInstallMsg=WebView2 Runtime is still missing. WordPack may not start correctly yet.%n%nPlease install WebView2 Runtime from:%n%1
 english.CreateDesktopIcon=Create a &desktop shortcut
 english.LaunchProgram=Launch %1
+english.RemovePersonalDataPrompt=Also remove personal data (settings/history/cache)?
 chinesesimplified.WebView2PageTitle=安装 WebView2 运行时
 chinesesimplified.WebView2PageSubtitle=WordPack 运行依赖 WebView2 Runtime。
 chinesesimplified.WebView2NeedText=系统中未检测到 WebView2 Runtime。%n请选择安装前的处理方式：
@@ -72,6 +73,7 @@ chinesesimplified.WebView2InstallFailedMsg=WebView2 安装未完成。%n%n你可
 chinesesimplified.WebView2MissingAfterInstallMsg=系统仍缺少 WebView2 Runtime，WordPack 可能暂时无法正常启动。%n%n请从以下地址安装 WebView2：%n%1
 chinesesimplified.CreateDesktopIcon=创建桌面快捷方式(&D)
 chinesesimplified.LaunchProgram=启动 %1
+chinesesimplified.RemovePersonalDataPrompt=是否同时清理个人数据（设置/历史记录/缓存）?
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -83,17 +85,15 @@ Source: "..\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; DestName: "W
 Source: "..\argosmodel\*"; DestDir: "{app}\argosmodel"; Flags: recursesubdirs ignoreversion createallsubdirs
 #endif
 
+[Dirs]
+Name: "{app}\data"; Permissions: users-modify
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
-
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}\data"
-Type: filesandordirs; Name: "{app}\*"
-Type: filesandordirs; Name: "{app}"
 
 [Code]
 const
@@ -106,6 +106,7 @@ var
   WebView2AutoInstallSelected: Boolean;
   WebView2OptionAuto: TNewRadioButton;
   WebView2OptionManual: TNewRadioButton;
+  RemovePersonalDataOnUninstall: Boolean;
 
 function HasWebView2Runtime(): Boolean;
 var
@@ -349,6 +350,40 @@ begin
   end;
 end;
 
+function GetCurrentUserDataDir(): String;
+begin
+  Result := ExpandConstant('{localappdata}\WordPack\data');
+end;
+
+function GetInstallDataDir(): String;
+begin
+  Result := ExpandConstant('{app}\data');
+end;
+
+function GetLegacyUserDataDir(): String;
+var
+  UserProfile: String;
+begin
+  UserProfile := Trim(GetEnv('USERPROFILE'));
+  if UserProfile = '' then
+    Result := ''
+  else
+    Result := AddBackslash(UserProfile) + '.wordpack\data';
+end;
+
+procedure DeleteDirIfExists(const DirPath: String);
+begin
+  if (Trim(DirPath) <> '') and DirExists(DirPath) then
+    DelTree(DirPath, True, True, True);
+end;
+
+procedure DeleteUserPersonalData();
+begin
+  DeleteDirIfExists(GetInstallDataDir());
+  DeleteDirIfExists(GetCurrentUserDataDir());
+  DeleteDirIfExists(GetLegacyUserDataDir());
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -358,5 +393,14 @@ begin
     { Ensure running instances are terminated before file deletion. }
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "{#MyAppExeName}" /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(300);
+
+    RemovePersonalDataOnUninstall :=
+      MsgBox(CustomMessage('RemovePersonalDataPrompt'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+  end;
+
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if RemovePersonalDataOnUninstall then
+      DeleteUserPersonalData();
   end;
 end;

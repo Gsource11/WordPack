@@ -134,11 +134,12 @@ def _configure_winapi_signatures() -> None:
         user32.CallNextHookEx.restype = wintypes.LPARAM
         user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
         user32.UnhookWindowsHookEx.restype = wintypes.BOOL
-        user32.GetMessageW.argtypes = [POINTER(MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        # Do not bind GetMessage/TranslateMessage/DispatchMessage argtypes to
+        # module-local MSG pointers. Other modules define compatible MSG
+        # structs; strict argtypes causes cross-module ctypes type mismatch on
+        # Python 3.12+ (expected LP_MSG instance).
         user32.GetMessageW.restype = wintypes.BOOL
-        user32.TranslateMessage.argtypes = [POINTER(MSG)]
         user32.TranslateMessage.restype = wintypes.BOOL
-        user32.DispatchMessageW.argtypes = [POINTER(MSG)]
         user32.DispatchMessageW.restype = wintypes.LPARAM
     except Exception:
         logger.exception("Failed to configure WinAPI signatures for hotkeys")
