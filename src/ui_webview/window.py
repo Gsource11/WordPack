@@ -1653,31 +1653,12 @@ class WordPackWebviewApp:
     def get_history_rows(self) -> list[dict[str, Any]]:
         return self.history.list_recent(limit=120)
 
-    def _history_filters_payload(self) -> dict[str, Any]:
-        return {
-            "directions": ["all", *self.history.distinct_directions()],
-            "retentionDays": int(getattr(self.config.history, "retention_days", 30) or 30),
-        }
-
     def list_history(self, payload: dict[str, Any]) -> dict[str, Any]:
         args = payload if isinstance(payload, dict) else {}
         tab = str(args.get("tab", "recent") or "recent").strip().lower()
         if tab not in {"recent", "favorites"}:
             tab = "recent"
         q = str(args.get("q", "") or "").strip()
-        mode = str(args.get("mode", "all") or "all").strip().lower()
-        if mode not in {"all", "dictionary", "ai"}:
-            mode = "all"
-        direction = str(args.get("direction", "all") or "all").strip()
-        source_kind = str(args.get("source_kind", "all") or "all").strip().lower()
-        if source_kind not in {"all", "manual", "selection", "screenshot"}:
-            source_kind = "all"
-        try:
-            range_days = int(args.get("range_days", 0) or 0)
-        except Exception:
-            range_days = 0
-        if range_days not in {0, 7, 30, 90}:
-            range_days = 0
         try:
             limit = int(args.get("limit", 50) or 50)
         except Exception:
@@ -1690,14 +1671,9 @@ class WordPackWebviewApp:
         result = self.history.list_records(
             tab=tab,
             q=q,
-            mode=mode,
-            direction=direction,
-            source_kind=source_kind,
-            range_days=range_days,
             limit=limit,
             offset=offset,
         )
-        result["filters"] = self._history_filters_payload()
         return result
 
     def toggle_history_favorite(self, record_id: int, favorite: bool) -> dict[str, Any]:
@@ -1722,7 +1698,6 @@ class WordPackWebviewApp:
             "dictionaryRuntimeHint": str(dictionary_status.get("runtime_hint", "")),
             "dictionaryDiagnostics": str(dictionary_status.get("diagnostics", "")),
             "effectiveTheme": self._resolved_theme_mode(),
-            "historyFilters": self._history_filters_payload(),
         }
 
     def set_translation_mode(self, mode: str) -> dict[str, Any]:
@@ -2685,7 +2660,7 @@ class WordPackWebviewApp:
         with self.lock:
             self.ui_state.history = history_rows
         self.set_status("历史记录已清空")
-        response = {"history": history_rows, "filters": self._history_filters_payload()}
+        response = {"history": history_rows}
         self.bridge.send("main", "history-updated", response)
         return response
 

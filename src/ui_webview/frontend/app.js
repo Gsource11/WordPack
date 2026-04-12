@@ -56,19 +56,12 @@
     historyPanel: {
       tab: "recent",
       q: "",
-      mode: "all",
-      direction: "all",
-      source_kind: "all",
-      range_days: 0,
       offset: 0,
       limit: 50,
       total: 0,
       has_more: false,
       items: [],
       loading: false,
-      filters: {
-        directions: ["all"],
-      },
       scrollTop: 0,
       viewportHeight: 420,
       rowHeight: 124,
@@ -328,19 +321,6 @@
         >${escapeHtml(option.label)}</button>`).join("")}
     </div>`;
 
-  const historySourceLabel = (value) => {
-    switch (String(value || "").toLowerCase()) {
-      case "selection":
-        return t("划词", "Selection");
-      case "screenshot":
-        return t("截图", "Screenshot");
-      case "manual":
-      default:
-        return t("手动", "Manual");
-    }
-  };
-
-  const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : t("词典", "Dictionary"));
   const formatDateTime = (timestampSec) => {
     const ms = Number(timestampSec || 0) * 1000;
     if (!Number.isFinite(ms) || ms <= 0) return t("未检测", "Unchecked");
@@ -478,10 +458,6 @@
     return {
       tab: panel.tab,
       q: panel.q,
-      mode: panel.mode,
-      direction: panel.direction,
-      source_kind: panel.source_kind,
-      range_days: panel.range_days,
       limit: panel.limit,
       offset: reset ? 0 : panel.offset,
     };
@@ -509,12 +485,6 @@
       panel.total = Number(payload.total || panel.items.length);
       panel.has_more = Boolean(payload.has_more);
       panel.offset = panel.items.length;
-      if (payload.filters?.directions?.length) {
-        panel.filters.directions = payload.filters.directions;
-        if (!panel.filters.directions.includes(panel.direction)) {
-          panel.direction = "all";
-        }
-      }
       rerender();
       if (shouldRefocusSearch) {
         window.requestAnimationFrame(() => {
@@ -1075,12 +1045,7 @@
         state.settingsDraft = clone(payload.config);
       }
     }
-    if (payload.settings) {
-      state.settings = payload.settings;
-      if (payload.settings.historyFilters?.directions?.length) {
-        state.historyPanel.filters.directions = payload.settings.historyFilters.directions;
-      }
-    }
+    if (payload.settings) state.settings = payload.settings;
     if (payload.aiAvailability) {
       state.aiAvailable = Boolean(payload.aiAvailability.available);
       state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
@@ -1639,10 +1604,6 @@
       { value: "click", label: t("点击", "Click") },
       { value: "hover", label: t("悬停", "Hover") },
     ];
-    const historyDirectionOptions = (historyPanel.filters?.directions || ["all"]).map((value) => ({
-      value,
-      label: value === "all" ? t("全部方向", "All Directions") : value,
-    }));
     const aiTestIcon = state.testingAi ? icons.link : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.link);
     const aiStatusText = state.aiAvailableChecked ? (state.aiAvailable ? t("可用", "Available") : t("不可用", "Unavailable")) : t("检测中", "Checking");
     const aiStatusTime = formatDateTime(state.aiAvailabilityCheckedAt);
@@ -1746,50 +1707,6 @@
                 <input class="history-search" data-history-field="q" placeholder="${escapeHtml(t("搜索原文或译文", "Search source or translation"))}" value="${escapeHtml(historyPanel.q)}" />
                 <button class="icon-button history-search-trigger" data-action="history-search-now" aria-label="${escapeHtml(t("立即搜索", "Search now"))}">${icons.search}</button>
               </div>
-              <div class="history-filter-row">
-                <label class="history-filter-item">
-                  <span class="history-filter-label">${escapeHtml(t("模式", "Mode"))}</span>
-                  <span class="history-select-wrap">
-                    <select class="history-filter-select" data-history-field="mode">
-                      <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
-                      <option value="dictionary" ${historyPanel.mode === "dictionary" ? "selected" : ""}>${escapeHtml(t("词典", "Dictionary"))}</option>
-                      <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
-                    </select>
-                  </span>
-                </label>
-                <label class="history-filter-item">
-                  <span class="history-filter-label">${escapeHtml(t("来源", "Source"))}</span>
-                  <span class="history-select-wrap">
-                    <select class="history-filter-select" data-history-field="source_kind">
-                      <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
-                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>${escapeHtml(t("手动", "Manual"))}</option>
-                      <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>${escapeHtml(t("划词", "Selection"))}</option>
-                      <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>${escapeHtml(t("截图", "Screenshot"))}</option>
-                    </select>
-                  </span>
-                </label>
-              </div>
-              <div class="history-filter-row">
-                <label class="history-filter-item">
-                  <span class="history-filter-label">${escapeHtml(t("方向", "Direction"))}</span>
-                  <span class="history-select-wrap">
-                    <select class="history-filter-select" data-history-field="direction">
-                      ${historyDirectionOptions.map((opt) => `<option value="${escapeHtml(opt.value)}" ${historyPanel.direction === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
-                    </select>
-                  </span>
-                </label>
-                <label class="history-filter-item">
-                  <span class="history-filter-label">${escapeHtml(t("时间", "Time"))}</span>
-                  <span class="history-select-wrap">
-                    <select class="history-filter-select" data-history-field="range_days">
-                      <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
-                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>${escapeHtml(t("7 天内", "Last 7 days"))}</option>
-                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>${escapeHtml(t("30 天内", "Last 30 days"))}</option>
-                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>${escapeHtml(t("90 天内", "Last 90 days"))}</option>
-                    </select>
-                  </span>
-                </label>
-              </div>
             </div>
           </div>
           <div class="history-list" id="historyList" data-preserve-scroll="history">
@@ -1798,7 +1715,6 @@
                 <article class="history-card" data-history-id="${item.id}">
                   <div class="history-meta">
                     <span>${escapeHtml(item.created_at || "")}</span>
-                    <span>${escapeHtml(historySourceLabel(item.source_kind))} · ${escapeHtml(historyModeLabel(item.mode))} · ${escapeHtml(t("使用", "Used"))} ${Number(item.use_count || 0)} ${escapeHtml(t("次", "times"))}</span>
                   </div>
                   <div class="history-text history-source">${escapeHtml((item.source_text || "").slice(0, 180))}</div>
                   <div class="history-text history-result">${escapeHtml((item.result_text || "").slice(0, 180))}</div>
@@ -2900,15 +2816,9 @@
   function handleInput(event) {
     const historyField = event.target.dataset.historyField;
     if (historyField) {
-      let value = event.target.value;
-      if (historyField === "range_days") {
-        value = Number(value || 0);
-      }
-      state.historyPanel[historyField] = value;
       if (historyField === "q") {
-        return;
+        state.historyPanel.q = event.target.value;
       }
-      scheduleHistorySearch(true);
       return;
     }
 

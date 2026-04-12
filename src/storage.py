@@ -277,22 +277,11 @@ class HistoryStore:
             conn.commit()
             return int(cur.rowcount or 0)
 
-    def distinct_directions(self) -> list[str]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT DISTINCT direction
-                FROM history
-                WHERE direction IS NOT NULL AND direction != ''
-                ORDER BY direction ASC
-                """,
-            ).fetchall()
-        return [str(row["direction"]) for row in rows if row["direction"]]
-
     def clear(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM history")
             conn.commit()
+
     @staticmethod
     def _normalize_mode(mode: str | None) -> str:
         value = str(mode or "dictionary").strip().lower()
