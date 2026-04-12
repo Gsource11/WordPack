@@ -1070,6 +1070,23 @@ class WordPackWebviewApp:
                     bool(visible_on_taskbar),
                 )
 
+            # Win11 may drop rounded-corner compositor preference after EXSTYLE
+            # flips between TOOLWINDOW/APPWINDOW; restore it when main window
+            # returns to taskbar-visible mode.
+            if bool(visible_on_taskbar) and self._is_windows_11_or_newer():
+                try:
+                    DWMWA_WINDOW_CORNER_PREFERENCE = 33
+                    DWMWCP_ROUND = 2
+                    preference = ctypes.c_int(DWMWCP_ROUND)
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        ctypes.c_void_p(hwnd),
+                        ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
+                        ctypes.byref(preference),
+                        ctypes.sizeof(preference),
+                    )
+                except Exception:
+                    pass
+
         try:
             self._run_on_window_ui(
                 window,
@@ -4171,9 +4188,18 @@ class WordPackWebviewApp:
         if kind == "main":
             if self.main_window is not None:
                 try:
-                    self._set_main_window_taskbar_visibility(False, wait=True)
-                    self.main_window.hide()
+                    self._run_on_window_ui(
+                        self.main_window,
+                        lambda: self.main_window.hide(),
+                        wait=True,
+                        timeout_sec=1.2,
+                        log_prefix="close_window.main.hide",
+                    )
                     self.hidden = True
+                    # On Windows 11, switching extended styles while the window is
+                    # still visible can cause a one-frame flash. Hide first, then
+                    # update taskbar visibility.
+                    self._set_main_window_taskbar_visibility(False, wait=True)
                     return {"ok": True, "hidden": True}
                 except Exception:
                     self.logger.exception("Failed to hide main window")
