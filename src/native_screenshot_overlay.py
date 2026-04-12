@@ -330,6 +330,7 @@ class _NativeScreenshotForm:
         self._form.UpdateStyles()
 
         self._border_pen = Pen(Color.FromArgb(255, 80, 160, 255), 2.0)
+        self._selection_fill_brush = SolidBrush(Color.FromArgb(72, 255, 136, 0))
         self._size_bg_brush = SolidBrush(Color.FromArgb(220, 18, 24, 33))
         self._size_text_brush = SolidBrush(Color.FromArgb(245, 245, 245))
         self._hint_bg_brush = SolidBrush(Color.FromArgb(205, 58, 62, 70))
@@ -518,6 +519,7 @@ class _NativeScreenshotForm:
             rect = self._normalized_rect(self._start, self._current)
         if rect is not None and rect[2] > 0 and rect[3] > 0:
             x, y, w, h = rect
+            graphics.FillRectangle(self._selection_fill_brush, Rectangle(x, y, max(1, w), max(1, h)))
             graphics.DrawRectangle(self._border_pen, Rectangle(x, y, max(1, w - 1), max(1, h - 1)))
             self._draw_size_label(graphics, x, y, w, h, width)
 
