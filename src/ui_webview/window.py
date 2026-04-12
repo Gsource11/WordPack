@@ -3593,9 +3593,27 @@ class WordPackWebviewApp:
         global_icon_trigger = str(self.config.interaction.selection_icon_trigger or "click").strip().lower()
         if global_icon_trigger not in {"click", "hover"}:
             global_icon_trigger = "click"
-        # User-selected global interaction mode is authoritative.
         exe = self._normalize_executable_name(executable or get_foreground_process_name())
-        return global_mode, global_icon_trigger, exe
+        mode = global_mode
+        icon_trigger = global_icon_trigger
+
+        for profile in self.config.interaction.app_profiles or []:
+            if not isinstance(profile, SelectionAppProfile):
+                continue
+            profile_exe = self._normalize_executable_name(getattr(profile, "executable", ""))
+            if not profile_exe or profile_exe != exe:
+                continue
+
+            profile_mode = str(getattr(profile, "mode", "inherit") or "inherit").strip().lower()
+            if profile_mode in {"icon", "double_ctrl", "double_alt", "double_shift", "disabled"}:
+                mode = profile_mode
+
+            profile_icon_trigger = str(getattr(profile, "icon_trigger", "inherit") or "inherit").strip().lower()
+            if profile_icon_trigger in {"click", "hover"}:
+                icon_trigger = profile_icon_trigger
+            break
+
+        return mode, icon_trigger, exe
 
     @staticmethod
     def _selection_payload_int(payload: dict[str, Any], key: str, default: int = 0) -> int:
