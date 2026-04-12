@@ -1468,6 +1468,7 @@ class WordPackWebviewApp:
                 "view": "tray",
                 "appTitle": APP_TITLE,
                 "branding": self._branding_payload(),
+                "config": self._serialize_config(),
                 "themeMode": self._resolved_theme_mode(),
                 "trayMenu": self._tray_menu_payload(),
                 "aiAvailability": self._ai_availability_payload(),
@@ -1787,6 +1788,7 @@ class WordPackWebviewApp:
             "tray-menu-updated",
             {
                 "themeMode": self._resolved_theme_mode(),
+                "uiLanguage": str(getattr(self.config, "ui_language", "zh-CN") or "zh-CN"),
                 "trayMenu": self._tray_menu_payload(),
             },
         )
@@ -2696,6 +2698,11 @@ class WordPackWebviewApp:
         interaction = payload.get("interaction", {}) if isinstance(payload, dict) else {}
         dictionary = payload.get("dictionary", {}) if isinstance(payload, dict) else {}
         theme_mode = str(payload.get("theme_mode", self.config.theme_mode) or self.config.theme_mode) if isinstance(payload, dict) else self.config.theme_mode
+        ui_language = (
+            ConfigStore._normalize_ui_language(payload.get("ui_language", getattr(self.config, "ui_language", "zh-CN")))
+            if isinstance(payload, dict)
+            else ConfigStore._normalize_ui_language(getattr(self.config, "ui_language", "zh-CN"))
+        )
         startup_launch_enabled = bool(interaction.get("startup_launch_enabled", self.config.interaction.startup_launch_enabled))
 
         try:
@@ -2850,6 +2857,7 @@ class WordPackWebviewApp:
         if theme_mode not in {"system", "light", "dark"}:
             theme_mode = "system"
         self.config.theme_mode = theme_mode
+        self.config.ui_language = ui_language
         self.ui_state.theme_mode = self._resolved_theme_mode(theme_mode)
         self.ui_state.direction = self._direction_label()
         self.config_store.save(self.config)

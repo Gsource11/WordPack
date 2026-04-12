@@ -75,6 +75,7 @@ class HistoryConfig:
 class AppConfig:
     translation_mode: str = "dictionary"
     theme_mode: str = "system"
+    ui_language: str = "zh-CN"
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     dictionary: DictionaryConfig = field(default_factory=DictionaryConfig)
     ocr: OCRConfig = field(default_factory=OCRConfig)
@@ -91,6 +92,13 @@ class ConfigStore:
     def _normalize_translation_mode(value: str | None) -> str:
         mode = str(value or "dictionary").strip().lower()
         return mode if mode in {"dictionary", "ai"} else "dictionary"
+
+    @staticmethod
+    def _normalize_ui_language(value: str | None) -> str:
+        text = str(value or "zh-cn").strip().lower()
+        if text in {"en", "en-us"}:
+            return "en-US"
+        return "zh-CN"
 
     @staticmethod
     def _default_selection_app_profiles() -> list[SelectionAppProfile]:
@@ -165,6 +173,7 @@ class ConfigStore:
         cfg = AppConfig(
             translation_mode=self._normalize_translation_mode(raw.get("translation_mode", "dictionary")),
             theme_mode=str(raw.get("theme_mode", "system") or "system"),
+            ui_language=self._normalize_ui_language(raw.get("ui_language", "zh-CN")),
             openai=OpenAIConfig(
                 base_url=openai_raw.get("base_url", "https://api.openai.com/v1"),
                 api_key=openai_raw.get("api_key", ""),
@@ -224,6 +233,7 @@ class ConfigStore:
         cfg.translation_mode = self._normalize_translation_mode(cfg.translation_mode)
         if cfg.theme_mode not in {"system", "light", "dark"}:
             cfg.theme_mode = "system"
+        cfg.ui_language = self._normalize_ui_language(cfg.ui_language)
 
         if not cfg.dictionary.preferred_direction:
             cfg.dictionary.preferred_direction = "auto"
@@ -293,6 +303,7 @@ class ConfigStore:
 
     def save(self, config: AppConfig) -> None:
         config.translation_mode = self._normalize_translation_mode(config.translation_mode)
+        config.ui_language = self._normalize_ui_language(getattr(config, "ui_language", "zh-CN"))
         payload = asdict(config)
         tmp_path = self.config_path.with_name(f"{self.config_path.name}.tmp")
         try:

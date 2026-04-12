@@ -15,7 +15,7 @@
       status: "",
       translation_mode: "dictionary",
       theme_mode: "light",
-      direction: "方向: 自动",
+      direction: "Direction: auto",
       history: [],
     },
     config: null,
@@ -84,6 +84,80 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
+  const normalizeUiLanguage = (value) => {
+    const text = String(value || "").trim().toLowerCase();
+    return (text === "en" || text === "en-us") ? "en-US" : "zh-CN";
+  };
+
+  const currentUiLanguage = () =>
+    normalizeUiLanguage(
+      state.settingsOpen
+        ? (state.settingsDraft?.ui_language || state.config?.ui_language || "zh-CN")
+        : (state.config?.ui_language || state.settingsDraft?.ui_language || "zh-CN"),
+    );
+
+  const isEnglishUI = () => currentUiLanguage() === "en-US";
+  const t = (zh, en) => (isEnglishUI() ? en : zh);
+
+  function localizeBackendText(input) {
+    const raw = String(input ?? "");
+    if (!isEnglishUI() || !raw) return raw;
+    const exact = {
+      "已复制到剪贴板": "Copied to clipboard",
+      "复制失败，请重试": "Copy failed, please try again",
+      "没有可复制的内容": "No content to copy",
+      "暂无结果": "No result",
+      "AI 不可用，请先配置并测试连接": "AI is unavailable. Configure and test the connection first.",
+      "AI 状态未完成检测，请先在设置中测试 AI 连接": "AI status has not been verified. Test AI connection in Settings first.",
+      "请先输入并翻译": "Enter text and run a translation first",
+      "翻译进行中，请稍后": "Translation in progress, please wait",
+      "请先完成一次翻译": "Complete one translation first",
+      "仅短词或短句支持多候选": "Only short words or short sentences support multi-candidates",
+      "将自动切换到 AI 并生成 4 个候选译文": "Will switch to AI automatically and generate 4 candidate translations",
+      "生成 4 个候选译文": "Generate 4 candidate translations",
+      "模式不可用，请检查配置": "Mode unavailable. Check your configuration.",
+      "当前无可翻译文本": "No translatable text right now",
+      "候选生成功能不可用": "Candidate generation is unavailable",
+      "候选生成失败": "Candidate generation failed",
+      "模型导入失败": "Model import failed",
+      "词典模型已更新": "Dictionary models updated",
+      "导入词典模型失败，请重试": "Dictionary model import failed, please try again",
+      "导入入口不可用，请重试": "Import entry unavailable, please try again",
+      "已开始导入词典模型": "Dictionary model import started",
+      "删除失败，请重试": "Delete failed, please try again",
+      "就绪": "Ready",
+      "测试中...": "Testing...",
+      "测试连接": "Test",
+      "可用": "Available",
+      "不可用": "Unavailable",
+      "检测中": "Checking",
+      "未检测": "Unchecked",
+      "加载中...": "Loading...",
+      "暂无历史记录": "No history yet",
+      "取消收藏": "Unfavorite",
+      "收藏": "Favorite",
+      "复制原文": "Copy source",
+      "复制译文": "Copy translation",
+      "删除": "Delete",
+      "加载更多（50条）": "Load More (50)",
+      "关闭": "Close",
+    };
+    if (Object.prototype.hasOwnProperty.call(exact, raw)) return exact[raw];
+    const directionMatch = raw.match(/^方向:\s*(.+)$/);
+    if (directionMatch) {
+      return `Direction: ${directionMatch[1]}`;
+    }
+    const switchedMatch = raw.match(/^词典方向已切换:\s*(.+)$/);
+    if (switchedMatch) {
+      return `Dictionary direction switched: ${switchedMatch[1]}`;
+    }
+    const bubbleClosedMatch = raw.match(/^气泡已关闭（可按\s+(.+)\s+恢复）$/);
+    if (bubbleClosedMatch) {
+      return `Bubble closed (press ${bubbleClosedMatch[1]} to restore)`;
+    }
+    return raw;
+  }
+
   const icon = (paths) =>
     `<span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
 
@@ -140,7 +214,7 @@
     const silent = Boolean(options && options.silent);
     const text = String(value ?? "");
     if (!text.trim()) {
-      if (!silent) showToast("warning", "没有可复制的内容");
+      if (!silent) showToast("warning", t("没有可复制的内容", "No content to copy"));
       return false;
     }
 
@@ -152,7 +226,7 @@
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        if (!silent) showToast("success", "已复制到剪贴板");
+        if (!silent) showToast("success", t("已复制到剪贴板", "Copied to clipboard"));
         return true;
       }
     } catch (_err) {
@@ -171,14 +245,14 @@
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
       if (ok) {
-        if (!silent) showToast("success", "已复制到剪贴板");
+        if (!silent) showToast("success", t("已复制到剪贴板", "Copied to clipboard"));
         return true;
       }
     } catch (_err) {
       // no-op
     }
 
-    if (!silent) showToast("error", (resp && resp.message) ? String(resp.message) : "复制失败，请重试");
+    if (!silent) showToast("error", (resp && resp.message) ? String(resp.message) : t("复制失败，请重试", "Copy failed, please try again"));
     return false;
   };
 
@@ -200,7 +274,7 @@
     }
     const hasSourceText = Boolean(String(bubble?.source_text || "").trim());
     if (hasSourceText && !Boolean(bubble?.pending)) {
-      return `<span class="bubble-empty-result">暂无结果</span>`;
+      return `<span class="bubble-empty-result">${escapeHtml(t("暂无结果", "No result"))}</span>`;
     }
     return "";
   }
@@ -257,21 +331,21 @@
   const historySourceLabel = (value) => {
     switch (String(value || "").toLowerCase()) {
       case "selection":
-        return "划词";
+        return t("划词", "Selection");
       case "screenshot":
-        return "截图";
+        return t("截图", "Screenshot");
       case "manual":
       default:
-        return "手动";
+        return t("手动", "Manual");
     }
   };
 
-  const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : "词典");
+  const historyModeLabel = (value) => (String(value || "").toLowerCase() === "ai" ? "AI" : t("词典", "Dictionary"));
   const formatDateTime = (timestampSec) => {
     const ms = Number(timestampSec || 0) * 1000;
-    if (!Number.isFinite(ms) || ms <= 0) return "未检测";
+    if (!Number.isFinite(ms) || ms <= 0) return t("未检测", "Unchecked");
     const d = new Date(ms);
-    if (Number.isNaN(d.getTime())) return "未检测";
+    if (Number.isNaN(d.getTime())) return t("未检测", "Unchecked");
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   };
@@ -306,26 +380,26 @@
       return {
         enabled: false,
         tip: aiAvailableChecked
-          ? "AI 翻译不可用，请先在设置中检查并测试 AI 连接"
-          : "AI 状态未完成检测，请先在设置中测试 AI 连接",
+          ? t("AI 翻译不可用，请先在设置中检查并测试 AI 连接", "AI translation is unavailable. Check and test AI connection in Settings first.")
+          : t("AI 状态未完成检测，请先在设置中测试 AI 连接", "AI status has not been verified. Test AI connection in Settings first."),
       };
     }
     if (!String(sourceText || "").trim()) {
-      return { enabled: false, tip: "请先输入并翻译" };
+      return { enabled: false, tip: t("请先输入并翻译", "Enter text and run a translation first") };
     }
     if (pending) {
-      return { enabled: false, tip: "翻译进行中，请稍后" };
+      return { enabled: false, tip: t("翻译进行中，请稍后", "Translation in progress, please wait") };
     }
     if (!hasResult) {
-      return { enabled: false, tip: "请先完成一次翻译" };
+      return { enabled: false, tip: t("请先完成一次翻译", "Complete one translation first") };
     }
     if (!isShortForCandidates(sourceText)) {
-      return { enabled: false, tip: "仅短词或短句支持多候选" };
+      return { enabled: false, tip: t("仅短词或短句支持多候选", "Only short words or short sentences support multi-candidates") };
     }
     if (currentMode !== "ai" && canUseAi) {
-      return { enabled: true, tip: "将自动切换到 AI 并生成 4 个候选译文" };
+      return { enabled: true, tip: t("将自动切换到 AI 并生成 4 个候选译文", "Will switch to AI automatically and generate 4 candidate translations") };
     }
-    return { enabled: true, tip: "生成 4 个候选译文" };
+    return { enabled: true, tip: t("生成 4 个候选译文", "Generate 4 candidate translations") };
   }
 
   function dictionaryAvailability() {
@@ -342,7 +416,7 @@
     const available = runtimeReady && hasDictionaryModels;
     return {
       available,
-      tip: available ? "" : "模式不可用，请检查配置",
+      tip: available ? "" : t("模式不可用，请检查配置", "Mode unavailable. Check your configuration."),
     };
   }
 
@@ -350,7 +424,7 @@
     const available = Boolean(state.aiAvailable);
     return {
       available,
-      tip: available ? "" : "模式不可用，请检查配置",
+      tip: available ? "" : t("模式不可用，请检查配置", "Mode unavailable. Check your configuration."),
     };
   }
 
@@ -369,7 +443,7 @@
       .map((item, index) => `${index + 1}. ${String(item || "").trim()}`)
       .filter(Boolean)
       .join("\n");
-  const isSuppressedAiNotice = (text) => /AI\s*不可用/.test(String(text || ""));
+  const isSuppressedAiNotice = (text) => /AI\s*(不可用|unavailable)/i.test(String(text || ""));
   function normalizeCandidateText(value) {
     return String(value || "")
       .trim()
@@ -839,9 +913,9 @@
     const settingsActive = activePanel === "settings";
     return `
       <div class="toolbar panel-switch-toolbar">
-        <button class="icon-button ${historyActive ? "is-active" : ""}" data-action="toggle-history-panel" aria-label="历史" aria-pressed="${historyActive ? "true" : "false"}">${icons.history}</button>
-        <button class="icon-button ${settingsActive ? "is-active" : ""}" data-action="toggle-settings-panel" aria-label="设置" aria-pressed="${settingsActive ? "true" : "false"}">${icons.settings}</button>
-        <button class="icon-button" data-action="close-app" aria-label="关闭">${icons.close}</button>
+        <button class="icon-button ${historyActive ? "is-active" : ""}" data-action="toggle-history-panel" aria-label="${escapeHtml(t("历史", "History"))}" aria-pressed="${historyActive ? "true" : "false"}">${icons.history}</button>
+        <button class="icon-button ${settingsActive ? "is-active" : ""}" data-action="toggle-settings-panel" aria-label="${escapeHtml(t("设置", "Settings"))}" aria-pressed="${settingsActive ? "true" : "false"}">${icons.settings}</button>
+        <button class="icon-button" data-action="close-app" aria-label="${escapeHtml(t("关闭", "Close"))}">${icons.close}</button>
       </div>`;
   }
 
@@ -879,7 +953,7 @@
     if (isSuppressedAiNotice(text)) {
       return;
     }
-    state.toast = { type: type || "", text: text || "" };
+    state.toast = { type: type || "", text: localizeBackendText(text || "") };
     if (toastTimer) {
       window.clearTimeout(toastTimer);
     }
@@ -941,7 +1015,7 @@
       const restoreIndex = Math.max(0, Math.min(Number(pending.index || 0), state.historyPanel.items.length));
       state.historyPanel.items.splice(restoreIndex, 0, pending.item);
       state.historyPanel.total = Math.max(0, Number(state.historyPanel.total || 0) + 1);
-      showToast("error", "删除失败，请重试");
+      showToast("error", t("删除失败，请重试", "Delete failed, please try again"));
       rerender();
       return;
     }
@@ -989,7 +1063,10 @@
     state.view = payload.view || state.view;
     if (payload.appTitle) state.appTitle = payload.appTitle;
     if (payload.branding) state.branding = payload.branding;
-    if (payload.ui) state.ui = payload.ui;
+    if (payload.ui) {
+      state.ui = payload.ui;
+      state.ui.status = localizeBackendText(state.ui.status || "");
+    }
     if (payload.config) {
       state.config = payload.config;
       setTheme(payload.themeMode || payload.settings?.effectiveTheme || "light");
@@ -1017,6 +1094,7 @@
     if (payload.screenshot) state.screenshot = payload.screenshot;
     state.ui.theme_mode = state.themeMode;
     document.title = state.appTitle || "WordPack";
+    document.documentElement.lang = isEnglishUI() ? "en" : "zh-CN";
   }
 
   function captureScrollPositions() {
@@ -1040,6 +1118,7 @@
 
   function rerender() {
     hideTooltip();
+    document.documentElement.lang = isEnglishUI() ? "en" : "zh-CN";
     const focusState = captureFocusState();
     const scrollPositions = captureScrollPositions();
     render();
@@ -1074,7 +1153,7 @@
       : icons.book;
     root.innerHTML = `
       <div class="icon-shell">
-        <button class="selection-icon active" data-action="trigger-selection" aria-label="划词翻译">
+        <button class="selection-icon active" data-action="trigger-selection" aria-label="${escapeHtml(t("划词翻译", "Selection Translate"))}">
           <span class="selection-icon-inner">${iconInner}</span>
         </button>
       </div>`;
@@ -1102,10 +1181,10 @@
       }
     }
     const menu = state.trayMenu || {};
-    const modeLabel = String(menu.modeLabel || (menu.mode === "ai" ? "AI" : "词典"));
+    const modeLabel = String(menu.mode === "ai" ? "AI" : t("词典", "Dictionary"));
     const aiChecked = Boolean(menu.aiChecked);
     const aiAvailable = Boolean(menu.aiAvailable);
-    const aiText = aiChecked ? (aiAvailable ? "AI 可用" : "AI 未就绪") : "AI 检测中";
+    const aiText = aiChecked ? (aiAvailable ? t("AI 可用", "AI Available") : t("AI 未就绪", "AI Not Ready")) : t("AI 检测中", "AI Checking");
     const iconUrl = state.branding?.bubbleIconUrl || state.branding?.appIconUrl || "";
     const appLabel = escapeHtml(state.appTitle || "WordPack");
     const startupEnabled = Boolean(menu.startupEnabled);
@@ -1113,7 +1192,7 @@
     const screenshotEnabled = Boolean(menu.screenshotEnabled);
     root.innerHTML = `
       <div class="tray-shell">
-        <section class="tray-card" role="menu" aria-label="${appLabel} 托盘菜单" tabindex="-1">
+        <section class="tray-card" role="menu" aria-label="${appLabel} ${escapeHtml(t("托盘菜单", "Tray Menu"))}" tabindex="-1">
           <header class="tray-header">
             <div class="tray-brand">
               ${iconUrl ? `<img class="tray-brand-icon" src="${iconUrl}" alt="${appLabel}" />` : ""}
@@ -1124,25 +1203,25 @@
             </div>
           </header>
           <div class="tray-group">
-            <button class="tray-item" data-action="tray-command" data-tray-action="show_main" role="menuitem">${icons.mainPanel}<span>主界面</span></button>
-            <button class="tray-item" data-action="tray-command" data-tray-action="open_history" role="menuitem">${icons.history}<span>历史</span></button>
-            <button class="tray-item" data-action="tray-command" data-tray-action="open_settings" role="menuitem">${icons.settings}<span>设置</span></button>
+            <button class="tray-item" data-action="tray-command" data-tray-action="show_main" role="menuitem">${icons.mainPanel}<span>${escapeHtml(t("主界面", "Main Window"))}</span></button>
+            <button class="tray-item" data-action="tray-command" data-tray-action="open_history" role="menuitem">${icons.history}<span>${escapeHtml(t("历史", "History"))}</span></button>
+            <button class="tray-item" data-action="tray-command" data-tray-action="open_settings" role="menuitem">${icons.settings}<span>${escapeHtml(t("设置", "Settings"))}</span></button>
           </div>
           <div class="tray-sep"></div>
           <div class="tray-group">
             <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_startup" role="menuitemcheckbox" aria-checked="${startupEnabled ? "true" : "false"}">
-              ${icons.startup}<span>开机自启动</span><span class="tray-toggle-pill ${startupEnabled ? "on" : ""}">${startupEnabled ? "开" : "关"}</span>
+              ${icons.startup}<span>${escapeHtml(t("开机自启动", "Launch at Startup"))}</span><span class="tray-toggle-pill ${startupEnabled ? "on" : ""}">${escapeHtml(startupEnabled ? t("开", "On") : t("关", "Off"))}</span>
             </button>
             <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_selection" role="menuitemcheckbox" aria-checked="${selectionEnabled ? "true" : "false"}">
-              ${icons.selection}<span>划词翻译</span><span class="tray-toggle-pill ${selectionEnabled ? "on" : ""}">${selectionEnabled ? "开" : "关"}</span>
+              ${icons.selection}<span>${escapeHtml(t("划词翻译", "Selection Translation"))}</span><span class="tray-toggle-pill ${selectionEnabled ? "on" : ""}">${escapeHtml(selectionEnabled ? t("开", "On") : t("关", "Off"))}</span>
             </button>
             <button class="tray-item tray-item-toggle" data-action="tray-command" data-tray-action="toggle_screenshot" role="menuitemcheckbox" aria-checked="${screenshotEnabled ? "true" : "false"}">
-              ${icons.screenshot}<span>截图翻译</span><span class="tray-toggle-pill ${screenshotEnabled ? "on" : ""}">${screenshotEnabled ? "开" : "关"}</span>
+              ${icons.screenshot}<span>${escapeHtml(t("截图翻译", "Screenshot Translation"))}</span><span class="tray-toggle-pill ${screenshotEnabled ? "on" : ""}">${escapeHtml(screenshotEnabled ? t("开", "On") : t("关", "Off"))}</span>
             </button>
           </div>
           <div class="tray-sep"></div>
           <div class="tray-group">
-            <button class="tray-item danger" data-action="tray-command" data-tray-action="exit" role="menuitem">${icons.close}<span>退出</span></button>
+            <button class="tray-item danger" data-action="tray-command" data-tray-action="exit" role="menuitem">${icons.close}<span>${escapeHtml(t("退出", "Exit"))}</span></button>
           </div>
         </section>
       </div>`;
@@ -1179,7 +1258,7 @@
       <div class="screenshot-shell" id="screenshotRoot">
         <img class="screenshot-image" id="screenshotImage" src="" alt="" draggable="false" />
         <div class="screenshot-selection hidden" id="screenshotSelection" data-size=""></div>
-        <div class="screenshot-hint" id="screenshotHint">拖拽选择截图区域 · 右键 / Esc 取消</div>
+        <div class="screenshot-hint" id="screenshotHint">${escapeHtml(t("拖拽选择截图区域 · 右键 / Esc 取消", "Drag to select screenshot area · Right click / Esc to cancel"))}</div>
       </div>`;
     const isCurrentRender = () => (
       Number(state.screenshotRenderToken || 0) === renderToken
@@ -1526,8 +1605,12 @@
     const hasDictionaryModels = dictionaryModels.length > 0;
     const dictionaryNoticeClass = (!hasDictionaryModels || !settings.dictionaryRuntimeReady) ? "warning" : "";
     const dictionaryNoticeHtml = !hasDictionaryModels
-      ? `未检测到已导入的词典模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">词典模型下载页</a> 下载模型后，再点击“导入词典模型”。`
-      : escapeHtml(settings.dictionaryRuntimeReady ? (settings.dictionaryDiagnostics || "词典运行环境可用") : (settings.dictionaryRuntimeHint || "词典运行环境未就绪"));
+      ? (
+        isEnglishUI()
+          ? `No imported dictionary model detected. Download from the <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">dictionary model page</a>, then click "Import Dictionary Model".`
+          : `未检测到已导入的词典模型。请到 <a href="https://www.argosopentech.com/argospm/index/" target="_blank" rel="noopener noreferrer">词典模型下载页</a> 下载模型后，再点击“导入词典模型”。`
+      )
+      : escapeHtml(localizeBackendText(settings.dictionaryRuntimeReady ? (settings.dictionaryDiagnostics || t("词典运行环境可用", "Dictionary runtime is ready")) : (settings.dictionaryRuntimeHint || t("词典运行环境未就绪", "Dictionary runtime is not ready"))));
     const draft = state.settingsDraft || clone(state.config || {});
     const startupEnabled = draft.interaction?.startup_launch_enabled === true;
     const selectionEnabled = draft.interaction?.selection_enabled !== false;
@@ -1547,21 +1630,21 @@
       ...(settings.dictionaryModels || []).map((item) => item.direction).filter(Boolean),
     ])).map((value) => ({ value, label: value }));
     const selectionModeOptions = [
-      { value: "icon", label: "图标触发" },
-      { value: "double_ctrl", label: "双击 Ctrl" },
-      { value: "double_alt", label: "双击 Alt" },
-      { value: "double_shift", label: "双击 Shift" },
+      { value: "icon", label: t("图标触发", "Icon Trigger") },
+      { value: "double_ctrl", label: t("双击 Ctrl", "Double Ctrl") },
+      { value: "double_alt", label: t("双击 Alt", "Double Alt") },
+      { value: "double_shift", label: t("双击 Shift", "Double Shift") },
     ];
     const iconTriggerOptions = [
-      { value: "click", label: "点击" },
-      { value: "hover", label: "悬停" },
+      { value: "click", label: t("点击", "Click") },
+      { value: "hover", label: t("悬停", "Hover") },
     ];
     const historyDirectionOptions = (historyPanel.filters?.directions || ["all"]).map((value) => ({
       value,
-      label: value === "all" ? "全部方向" : value,
+      label: value === "all" ? t("全部方向", "All Directions") : value,
     }));
     const aiTestIcon = state.testingAi ? icons.link : (state.aiTestState === "success" ? icons.check : state.aiTestState === "error" ? icons.error : icons.link);
-    const aiStatusText = state.aiAvailableChecked ? (state.aiAvailable ? "可用" : "不可用") : "检测中";
+    const aiStatusText = state.aiAvailableChecked ? (state.aiAvailable ? t("可用", "Available") : t("不可用", "Unavailable")) : t("检测中", "Checking");
     const aiStatusTime = formatDateTime(state.aiAvailabilityCheckedAt);
     const notice = state.notice
       ? `<div class="notice ${escapeHtml(state.notice.type || "")}">${escapeHtml(state.notice.text || "")}</div>`
@@ -1570,10 +1653,10 @@
       ? `<div class="global-toast ${escapeHtml(state.toast.type || "")}">${escapeHtml(state.toast.text || "")}</div>`
       : "";
     const historyUndoBar = pendingHistoryDelete
-      ? `<div class="history-undo-bar"><span>已删除</span><button class="history-undo-btn" data-action="history-delete-undo">撤销</button></div>`
+      ? `<div class="history-undo-bar"><span>${escapeHtml(t("已删除", "Deleted"))}</span><button class="history-undo-btn" data-action="history-delete-undo">${escapeHtml(t("撤销", "Undo"))}</button></div>`
       : "";
     const historyClearBar = state.historyClearConfirm
-      ? `<div class="history-clear-bar"><span>确定清空本地历史记录吗？</span><button class="history-clear-btn" data-action="history-clear-cancel">取消</button><button class="history-clear-btn primary" data-action="history-clear-confirm">确定</button></div>`
+      ? `<div class="history-clear-bar"><span>${escapeHtml(t("确定清空本地历史记录吗？", "Clear local history records?"))}</span><button class="history-clear-btn" data-action="history-clear-cancel">${escapeHtml(t("取消", "Cancel"))}</button><button class="history-clear-btn primary" data-action="history-clear-confirm">${escapeHtml(t("确定", "Confirm"))}</button></div>`
       : "";
     const mainCandidateState = candidateAvailability({
       mode,
@@ -1591,8 +1674,10 @@
     const mainCandidateRows = mainDisplayedCandidates.map((item, index) => `
       <div class="candidate-item">
         <div class="candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
-        <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="复制此候选">${icons.copy}</button>
+        <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="${escapeHtml(t("复制此候选", "Copy this candidate"))}">${icons.copy}</button>
       </div>`).join("");
+    const directionValue = String(draft.dictionary?.preferred_direction || state.config?.dictionary?.preferred_direction || "auto");
+    const directionLabel = directionValue === "auto" ? t("方向: 自动", "Direction: auto") : t(`方向: ${directionValue}`, `Direction: ${directionValue}`);
 
     root.innerHTML = `
       <div class="window-shell">
@@ -1603,25 +1688,25 @@
           </header>
           <div class="segmented">
             <div class="seg-track">
-              <button class="seg-btn ${mode === "dictionary" ? "active" : ""} ${dictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="dictionary" aria-disabled="${dictionaryModeAvailability.available ? "false" : "true"}" ${dictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(dictionaryModeAvailability.tip)}"`}>${icons.book}<span>词典翻译</span></button>
-              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>AI 翻译</span></button>
+              <button class="seg-btn ${mode === "dictionary" ? "active" : ""} ${dictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode" data-mode="dictionary" aria-disabled="${dictionaryModeAvailability.available ? "false" : "true"}" ${dictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(dictionaryModeAvailability.tip)}"`}>${icons.book}<span>${escapeHtml(t("词典翻译", "Dictionary"))}</span></button>
+              <button class="seg-btn ${mode === "ai" ? "active" : ""} ${aiModeEnabled ? "" : "disabled"}" data-action="set-mode" data-mode="ai" aria-disabled="${aiModeAvailability.available ? "false" : "true"}" ${aiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(aiModeAvailability.tip)}"`}>${icons.robot}<span>${escapeHtml(t("AI 翻译", "AI"))}</span></button>
             </div>
           </div>
           <section class="card input-card">
             <div class="card-head">
-              <div class="card-title">输入内容</div>
-              <button class="dir-button" data-action="cycle-direction">${escapeHtml(state.ui.direction || "方向: 自动")}</button>
+              <div class="card-title">${escapeHtml(t("输入内容", "Input"))}</div>
+              <button class="dir-button" data-action="cycle-direction">${escapeHtml(directionLabel)}</button>
             </div>
             <div class="input-shell">
-              <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="输入或粘贴待翻译文本"></textarea>
+              <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="${escapeHtml(t("输入或粘贴待翻译文本", "Type or paste text to translate"))}"></textarea>
             </div>
           </section>
-          <button class="primary-button" data-action="translate" ${translateEnabled ? "" : 'disabled data-tooltip="无可用翻译模式，请检查配置"'}>${mode === "ai" ? icons.robot : icons.book}<span>翻译</span></button>
+          <button class="primary-button" data-action="translate" ${translateEnabled ? "" : `disabled data-tooltip="${escapeHtml(t("无可用翻译模式，请检查配置", "No available translation mode. Check your configuration."))}"`}>${mode === "ai" ? icons.robot : icons.book}<span>${escapeHtml(t("翻译", "Translate"))}</span></button>
           <section class="card result-card ${showResultCard ? "" : "hidden"}">
             <div class="card-head">
-              <div class="card-title">翻译结果</div>
+              <div class="card-title">${escapeHtml(t("翻译结果", "Result"))}</div>
               <div class="result-actions">
-                <button class="mini-button ${mainCandidateDisabled ? "disabled" : ""}" id="mainCandidateBtn" data-action="generate-candidates-main" aria-disabled="${mainCandidateDisabled ? "true" : "false"}" ${mainCandidateDisabled ? `data-tooltip="${escapeHtml(mainCandidateState.tip || "候选生成功能不可用")}"` : ""}>${icons.candidates}</button>
+                <button class="mini-button ${mainCandidateDisabled ? "disabled" : ""}" id="mainCandidateBtn" data-action="generate-candidates-main" aria-disabled="${mainCandidateDisabled ? "true" : "false"}" ${mainCandidateDisabled ? `data-tooltip="${escapeHtml(mainCandidateState.tip || t("候选生成功能不可用", "Candidate generation is unavailable"))}"` : ""}>${icons.candidates}</button>
                 <button class="mini-button" data-action="open-zoom">${icons.expand}</button>
               </div>
             </div>
@@ -1631,15 +1716,15 @@
               </div>
               <aside class="candidate-pane ${showCandidatePane ? "open" : ""}" id="mainCandidatePane">
                 <div class="candidate-list">
-                  ${mainCandidateRows || `<div class="candidate-placeholder">点击右上角按钮生成候选</div>`}
-                  ${state.candidatePending ? `<div class="candidate-placeholder">候选生成中...</div>` : ""}
+                  ${mainCandidateRows || `<div class="candidate-placeholder">${escapeHtml(t("点击右上角按钮生成候选", "Click top-right button to generate candidates"))}</div>`}
+                  ${state.candidatePending ? `<div class="candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>` : ""}
                 </div>
               </aside>
             </div>
           </section>
           <div class="footer-actions">
-            <button class="ghost-button ${mainResultReady ? "" : "disabled"}" data-action="copy-result" ${mainResultReady ? (mainCopyAll ? 'title="复制全部候选译文" aria-label="复制全部候选译文"' : 'aria-label="复制"') : 'disabled aria-disabled="true" aria-label="复制"'}>${icons.copy}<span>复制</span></button>
-            <button class="ghost-button" data-action="clear-all">${icons.trash}<span>清空</span></button>
+            <button class="ghost-button ${mainResultReady ? "" : "disabled"}" data-action="copy-result" ${mainResultReady ? (mainCopyAll ? `title="${escapeHtml(t("复制全部候选译文", "Copy all candidate translations"))}" aria-label="${escapeHtml(t("复制全部候选译文", "Copy all candidate translations"))}"` : `aria-label="${escapeHtml(t("复制", "Copy"))}"`) : `disabled aria-disabled="true" aria-label="${escapeHtml(t("复制", "Copy"))}"`}>${icons.copy}<span>${escapeHtml(t("复制", "Copy"))}</span></button>
+            <button class="ghost-button" data-action="clear-all">${icons.trash}<span>${escapeHtml(t("清空", "Clear"))}</span></button>
           </div>
         </section>
       </div>
@@ -1648,45 +1733,45 @@
         <div class="sheet-panel history-sheet-panel">
           <div class="panel-drag-hitbox" data-drag-handle="history-top"></div>
           <div class="sheet-header" data-drag-handle="history-header">
-            <div class="sheet-title">历史记录</div>
+            <div class="sheet-title">${escapeHtml(t("历史记录", "History"))}</div>
             ${panelSwitchToolbar("history")}
           </div>
           <div class="history-toolbar">
             <div class="history-tabs">
-              <button class="history-tab ${historyPanel.tab === "recent" ? "active" : ""}" data-action="history-set-tab" data-tab="recent">最近</button>
-              <button class="history-tab ${historyPanel.tab === "favorites" ? "active" : ""}" data-action="history-set-tab" data-tab="favorites">收藏</button>
+              <button class="history-tab ${historyPanel.tab === "recent" ? "active" : ""}" data-action="history-set-tab" data-tab="recent">${escapeHtml(t("最近", "Recent"))}</button>
+              <button class="history-tab ${historyPanel.tab === "favorites" ? "active" : ""}" data-action="history-set-tab" data-tab="favorites">${escapeHtml(t("收藏", "Favorites"))}</button>
             </div>
             <div class="history-filters">
               <div class="history-search-row">
-                <input class="history-search" data-history-field="q" placeholder="搜索原文或译文" value="${escapeHtml(historyPanel.q)}" />
-                <button class="icon-button history-search-trigger" data-action="history-search-now" aria-label="立即搜索">${icons.search}</button>
+                <input class="history-search" data-history-field="q" placeholder="${escapeHtml(t("搜索原文或译文", "Search source or translation"))}" value="${escapeHtml(historyPanel.q)}" />
+                <button class="icon-button history-search-trigger" data-action="history-search-now" aria-label="${escapeHtml(t("立即搜索", "Search now"))}">${icons.search}</button>
               </div>
               <div class="history-filter-row">
                 <label class="history-filter-item">
-                  <span class="history-filter-label">模式</span>
+                  <span class="history-filter-label">${escapeHtml(t("模式", "Mode"))}</span>
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="mode">
-                      <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>全部</option>
-                      <option value="dictionary" ${historyPanel.mode === "dictionary" ? "selected" : ""}>词典</option>
+                      <option value="all" ${historyPanel.mode === "all" ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
+                      <option value="dictionary" ${historyPanel.mode === "dictionary" ? "selected" : ""}>${escapeHtml(t("词典", "Dictionary"))}</option>
                       <option value="ai" ${historyPanel.mode === "ai" ? "selected" : ""}>AI</option>
                     </select>
                   </span>
                 </label>
                 <label class="history-filter-item">
-                  <span class="history-filter-label">来源</span>
+                  <span class="history-filter-label">${escapeHtml(t("来源", "Source"))}</span>
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="source_kind">
-                      <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>全部</option>
-                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>手动</option>
-                      <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>划词</option>
-                      <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>截图</option>
+                      <option value="all" ${historyPanel.source_kind === "all" ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
+                      <option value="manual" ${historyPanel.source_kind === "manual" ? "selected" : ""}>${escapeHtml(t("手动", "Manual"))}</option>
+                      <option value="selection" ${historyPanel.source_kind === "selection" ? "selected" : ""}>${escapeHtml(t("划词", "Selection"))}</option>
+                      <option value="screenshot" ${historyPanel.source_kind === "screenshot" ? "selected" : ""}>${escapeHtml(t("截图", "Screenshot"))}</option>
                     </select>
                   </span>
                 </label>
               </div>
               <div class="history-filter-row">
                 <label class="history-filter-item">
-                  <span class="history-filter-label">方向</span>
+                  <span class="history-filter-label">${escapeHtml(t("方向", "Direction"))}</span>
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="direction">
                       ${historyDirectionOptions.map((opt) => `<option value="${escapeHtml(opt.value)}" ${historyPanel.direction === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
@@ -1694,13 +1779,13 @@
                   </span>
                 </label>
                 <label class="history-filter-item">
-                  <span class="history-filter-label">时间</span>
+                  <span class="history-filter-label">${escapeHtml(t("时间", "Time"))}</span>
                   <span class="history-select-wrap">
                     <select class="history-filter-select" data-history-field="range_days">
-                      <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>全部</option>
-                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>7 天内</option>
-                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>30 天内</option>
-                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>90 天内</option>
+                      <option value="0" ${Number(historyPanel.range_days) === 0 ? "selected" : ""}>${escapeHtml(t("全部", "All"))}</option>
+                      <option value="7" ${Number(historyPanel.range_days) === 7 ? "selected" : ""}>${escapeHtml(t("7 天内", "Last 7 days"))}</option>
+                      <option value="30" ${Number(historyPanel.range_days) === 30 ? "selected" : ""}>${escapeHtml(t("30 天内", "Last 30 days"))}</option>
+                      <option value="90" ${Number(historyPanel.range_days) === 90 ? "selected" : ""}>${escapeHtml(t("90 天内", "Last 90 days"))}</option>
                     </select>
                   </span>
                 </label>
@@ -1713,22 +1798,22 @@
                 <article class="history-card" data-history-id="${item.id}">
                   <div class="history-meta">
                     <span>${escapeHtml(item.created_at || "")}</span>
-                    <span>${escapeHtml(historySourceLabel(item.source_kind))} · ${escapeHtml(historyModeLabel(item.mode))} · 使用 ${Number(item.use_count || 0)} 次</span>
+                    <span>${escapeHtml(historySourceLabel(item.source_kind))} · ${escapeHtml(historyModeLabel(item.mode))} · ${escapeHtml(t("使用", "Used"))} ${Number(item.use_count || 0)} ${escapeHtml(t("次", "times"))}</span>
                   </div>
                   <div class="history-text history-source">${escapeHtml((item.source_text || "").slice(0, 180))}</div>
                   <div class="history-text history-result">${escapeHtml((item.result_text || "").slice(0, 180))}</div>
                   <div class="history-actions">
-                    <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}" data-tooltip="${item.favorite ? "取消收藏" : "收藏"}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
-                    <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}" data-tooltip="复制原文">${historyCopySourceFlashId === Number(item.id) ? icons.check : icons.copy}</button>
-                    <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}" data-tooltip="复制译文">${historyCopyResultFlashId === Number(item.id) ? icons.check : icons.clipboard}</button>
-                    <button class="mini-button" data-action="history-delete" data-history-id="${item.id}" data-tooltip="删除">${icons.trash}</button>
+                    <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}" data-tooltip="${escapeHtml(item.favorite ? t("取消收藏", "Unfavorite") : t("收藏", "Favorite"))}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
+                    <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("复制原文", "Copy source"))}">${historyCopySourceFlashId === Number(item.id) ? icons.check : icons.copy}</button>
+                    <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("复制译文", "Copy translation"))}">${historyCopyResultFlashId === Number(item.id) ? icons.check : icons.clipboard}</button>
+                    <button class="mini-button" data-action="history-delete" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("删除", "Delete"))}">${icons.trash}</button>
                   </div>
                 </article>`).join("")}
-              ${historyPanel.has_more ? `<button class="ghost-button history-load-more" data-action="history-load-more" ${historyPanel.loading ? "disabled" : ""}>${historyPanel.loading ? "加载中..." : "加载更多（50条）"}</button>` : ""}
-            ` : `<div class="notice">${historyPanel.loading ? "加载中..." : "暂无历史记录"}</div>`}
+              ${historyPanel.has_more ? `<button class="ghost-button history-load-more" data-action="history-load-more" ${historyPanel.loading ? "disabled" : ""}>${escapeHtml(historyPanel.loading ? t("加载中...", "Loading...") : t("加载更多（50条）", "Load More (50)"))}</button>` : ""}
+            ` : `<div class="notice">${escapeHtml(historyPanel.loading ? t("加载中...", "Loading...") : t("暂无历史记录", "No history yet"))}</div>`}
           </div>
           <div class="settings-actions">
-            <button class="ghost-button" data-action="clear-history">${icons.trash}<span>清空历史</span></button>
+            <button class="ghost-button" data-action="clear-history">${icons.trash}<span>${escapeHtml(t("清空历史", "Clear History"))}</span></button>
           </div>
         </div>
       </aside>      <aside class="side-sheet ${state.settingsOpen ? "open" : ""}">
@@ -1736,15 +1821,15 @@
         <div class="sheet-panel settings-sheet-panel">
           <div class="panel-drag-hitbox" data-drag-handle="settings-top"></div>
           <div class="sheet-header" data-drag-handle="settings-header">
-            <div class="sheet-title">设置</div>
+            <div class="sheet-title">${escapeHtml(t("设置", "Settings"))}</div>
             ${panelSwitchToolbar("settings")}
           </div>
           <div class="settings-scroll" id="settingsScroll" data-preserve-scroll="settings">
             ${notice}
             <section class="setting-group">
-              <div class="setting-title">启动</div>
+              <div class="setting-title">${escapeHtml(t("启动", "Startup"))}</div>
               <div class="field">
-                <label>开机自启动</label>
+                <label>${escapeHtml(t("开机自启动", "Launch at Startup"))}</label>
                 <div class="choice-group">
                   <button
                     class="choice-chip ${startupEnabled ? "active" : ""}"
@@ -1753,7 +1838,7 @@
                     data-value="true"
                     data-value-type="boolean"
                     type="button"
-                  >开启</button>
+                  >${escapeHtml(t("开启", "On"))}</button>
                   <button
                     class="choice-chip ${!startupEnabled ? "active" : ""}"
                     data-action="set-setting-choice"
@@ -1761,95 +1846,116 @@
                     data-value="false"
                     data-value-type="boolean"
                     type="button"
-                  >关闭</button>
+                  >${escapeHtml(t("关闭", "Off"))}</button>
                 </div>
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>主窗口显示/隐藏快捷键</label>
-                  <small>快速唤起主窗口，或隐藏到托盘。</small>
+                  <label>${escapeHtml(t("主窗口显示/隐藏快捷键", "Main Window Toggle Shortcut"))}</label>
+                  <small>${escapeHtml(t("快速唤起主窗口，或隐藏到托盘。", "Quickly show the main window or hide it to tray."))}</small>
                 </div>
                 <div class="setting-toggle-control">
-                  <input class="shortcut-input" data-shortcut-field="interaction.main_toggle_hotkey" value="${escapeHtml(mainToggleHotkey)}" placeholder="按下新的快捷键组合" readonly />
+                  <input class="shortcut-input" data-shortcut-field="interaction.main_toggle_hotkey" value="${escapeHtml(mainToggleHotkey)}" placeholder="${escapeHtml(t("按下新的快捷键组合", "Press a new shortcut"))}" readonly />
                 </div>
               </div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">外观</div>
+              <div class="setting-title">${escapeHtml(t("外观", "Appearance"))}</div>
               <div class="field">
-                <label>主题</label>
+                <label>${escapeHtml(t("主题", "Theme"))}</label>
                 <div class="theme-switch">
                   <div class="theme-track">
-                    <button class="theme-btn ${((draft.theme_mode || "system") === "system") ? "active" : ""}" data-action="set-theme-draft" data-theme="system">跟随系统</button>
-                    <button class="theme-btn ${draft.theme_mode === "light" ? "active" : ""}" data-action="set-theme-draft" data-theme="light">亮色</button>
-                    <button class="theme-btn ${draft.theme_mode === "dark" ? "active" : ""}" data-action="set-theme-draft" data-theme="dark">暗色</button>
+                    <button class="theme-btn ${((draft.theme_mode || "system") === "system") ? "active" : ""}" data-action="set-theme-draft" data-theme="system">${escapeHtml(t("跟随系统", "System"))}</button>
+                    <button class="theme-btn ${draft.theme_mode === "light" ? "active" : ""}" data-action="set-theme-draft" data-theme="light">${escapeHtml(t("亮色", "Light"))}</button>
+                    <button class="theme-btn ${draft.theme_mode === "dark" ? "active" : ""}" data-action="set-theme-draft" data-theme="dark">${escapeHtml(t("暗色", "Dark"))}</button>
+                  </div>
+                </div>
+              </div>
+              <div class="field">
+                <label>${escapeHtml(t("界面语言", "Interface Language"))}</label>
+                <div class="theme-switch">
+                  <div class="theme-track">
+                    <button
+                      class="theme-btn ${normalizeUiLanguage(draft.ui_language || "zh-CN") === "zh-CN" ? "active" : ""}"
+                      data-action="set-setting-choice"
+                      data-field="ui_language"
+                      data-value="zh-CN"
+                      type="button"
+                    >中文</button>
+                    <button
+                      class="theme-btn ${normalizeUiLanguage(draft.ui_language || "zh-CN") === "en-US" ? "active" : ""}"
+                      data-action="set-setting-choice"
+                      data-field="ui_language"
+                      data-value="en-US"
+                      type="button"
+                    >English</button>
                   </div>
                 </div>
               </div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">AI 配置</div>
+              <div class="setting-title">${escapeHtml(t("AI 配置", "AI Configuration"))}</div>
               <div class="field"><label>Base URL</label><input spellcheck="false" data-field="openai.base_url" value="${escapeHtml(draft.openai?.base_url || "")}" /></div>
               <div class="field"><label>API Key</label><input type="password" autocomplete="off" spellcheck="false" data-field="openai.api_key" value="${escapeHtml(draft.openai?.api_key || "")}" /></div>
               <div class="field"><label>Model</label><input spellcheck="false" data-field="openai.model" value="${escapeHtml(draft.openai?.model || "")}" /></div>
               <div class="field"><label>Timeout(s)</label><input type="number" min="5" step="1" spellcheck="false" data-field="openai.timeout_sec" value="${escapeHtml(draft.openai?.timeout_sec ?? 60)}" /></div>
               <div class="settings-actions">
-                <button class="ghost-button" data-action="ollama-defaults">${icons.robot}<span>Ollama 默认</span></button>
-                <button class="ghost-button ai-test-button ${state.testingAi ? "testing" : ""} ${state.aiTestState}" data-action="test-ai" ${state.testingAi ? "disabled" : ""}>${aiTestIcon}<span>${state.testingAi ? "测试中..." : "测试连接"}</span></button>
+                <button class="ghost-button" data-action="ollama-defaults">${icons.robot}<span>${escapeHtml(t("Ollama 默认", "Ollama"))}</span></button>
+                <button class="ghost-button ai-test-button ${state.testingAi ? "testing" : ""} ${state.aiTestState}" data-action="test-ai" ${state.testingAi ? "disabled" : ""}>${aiTestIcon}<span>${escapeHtml(state.testingAi ? t("测试中...", "Testing...") : t("测试连接", "Test"))}</span></button>
               </div>
-              <div class="ai-status-inline">AI 状态：${escapeHtml(aiStatusText)} · 最近检测：${escapeHtml(aiStatusTime)}</div>
+              <div class="ai-status-inline">${escapeHtml(t("AI 状态", "AI Status"))}：${escapeHtml(aiStatusText)} · ${escapeHtml(t("最近检测", "Last Checked"))}：${escapeHtml(aiStatusTime)}</div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">词典模型</div>
+              <div class="setting-title">${escapeHtml(t("词典模型", "Dictionary Models"))}</div>
               <div class="field">
-                <label>默认方向</label>
+                <label>${escapeHtml(t("默认方向", "Default Direction"))}</label>
                 ${choiceGroupMarkup("dictionary.preferred_direction", draft.dictionary?.preferred_direction || "auto", directionOptions)}
               </div>
               <div class="notice ${dictionaryNoticeClass}">${dictionaryNoticeHtml}</div>
               <div class="settings-actions">
-                 <button class="ghost-button" data-action="import-dictionary-model">${icons.book}<span>导入词典模型</span></button>
+                 <button class="ghost-button" data-action="import-dictionary-model">${icons.book}<span>${escapeHtml(t("导入词典模型", "Import Dictionary Model"))}</span></button>
               </div>
             </section>
             <section class="setting-group">
-              <div class="setting-title">历史设置</div>
+              <div class="setting-title">${escapeHtml(t("历史设置", "History"))}</div>
               <div class="field">
-                <label>历史保留时长</label>
+                <label>${escapeHtml(t("历史保留时长", "History Retention"))}</label>
                 ${choiceGroupMarkup("history.retention_days", String(draft.history?.retention_days ?? 30), [
-                  { value: "7", label: "7 天" },
-                  { value: "30", label: "30 天" },
-                  { value: "90", label: "90 天" },
+                  { value: "7", label: t("7 天", "7 days") },
+                  { value: "30", label: t("30 天", "30 days") },
+                  { value: "90", label: t("90 天", "90 days") },
                 ])}
-                <small>超出保留时长的历史会自动清理。</small>
+                <small>${escapeHtml(t("超出保留时长的历史会自动清理。", "History older than retention period is cleared automatically."))}</small>
               </div>
               <div class="settings-actions">
-                <button class="ghost-button" data-action="clear-history-from-settings">${icons.trash}<span>一键清理历史</span></button>
+                <button class="ghost-button" data-action="clear-history-from-settings">${icons.trash}<span>${escapeHtml(t("一键清理历史", "Clear History Now"))}</span></button>
               </div>
             </section>
             <section class="setting-group operation-settings">
-              <div class="setting-title">操作设置</div>
+              <div class="setting-title">${escapeHtml(t("操作设置", "Interaction"))}</div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>启用划词翻译</label>
+                  <label>${escapeHtml(t("启用划词翻译", "Enable Selection Translation"))}</label>
                 </div>
                 <div class="setting-toggle-control">
                   ${choiceGroupMarkup("interaction.selection_enabled", String(selectionEnabled), [
-                    { value: "true", label: "开启" },
-                    { value: "false", label: "关闭" },
+                    { value: "true", label: t("开启", "On") },
+                    { value: "false", label: t("关闭", "Off") },
                   ], "boolean")}
                 </div>
                 ${selectionEnabled ? `
                   <div class="setting-toggle-extra">
                     <div class="field">
-                      <label>划词触发模式</label>
+                      <label>${escapeHtml(t("划词触发模式", "Selection Trigger Mode"))}</label>
                       ${choiceGroupMarkup("interaction.selection_trigger_mode", selectionTriggerMode, selectionModeOptions)}
                     </div>
                     ${selectionTriggerMode === "icon" ? `
                     <div class="field">
-                      <label>图标触发方式</label>
+                      <label>${escapeHtml(t("图标触发方式", "Icon Trigger Type"))}</label>
                       ${choiceGroupMarkup("interaction.selection_icon_trigger", draft.interaction?.selection_icon_trigger || "click", iconTriggerOptions)}
                     </div>
                     <div class="field">
-                      <label>图标延时(ms)</label>
+                      <label>${escapeHtml(t("图标延时(ms)", "Icon Delay (ms)"))}</label>
                       <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 100)}" />
                     </div>
                     ` : ""}
@@ -1858,57 +1964,57 @@
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>启用截图翻译</label>
+                  <label>${escapeHtml(t("启用截图翻译", "Enable Screenshot Translation"))}</label>
                 </div>
                 <div class="setting-toggle-control">
                   ${choiceGroupMarkup("interaction.screenshot_enabled", String(screenshotEnabled), [
-                    { value: "true", label: "开启" },
-                    { value: "false", label: "关闭" },
+                    { value: "true", label: t("开启", "On") },
+                    { value: "false", label: t("关闭", "Off") },
                   ], "boolean")}
                 </div>
                 ${screenshotEnabled ? `
                   <div class="setting-toggle-extra">
                     <div class="field">
-                      <label>截图翻译快捷键</label>
-                      <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="按下新的快捷键组合" readonly />
-                      <small>按下新的组合键即可保存，Backspace / Delete / Esc 可清空。</small>
+                      <label>${escapeHtml(t("截图翻译快捷键", "Screenshot Translation Shortcut"))}</label>
+                      <input class="shortcut-input" data-shortcut-field="interaction.screenshot_hotkey" value="${escapeHtml(screenshotHotkey)}" placeholder="${escapeHtml(t("按下新的快捷键组合", "Press a new shortcut"))}" readonly />
+                      <small>${escapeHtml(t("按下新的组合键即可保存，Backspace / Delete / Esc 可清空。", "Press new keys to save. Backspace / Delete / Esc clears it."))}</small>
                     </div>
                   </div>
                 ` : ""}
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>鼠标快速移开关闭气泡（档位）</label>
-                  <small>仅在未固定且非交互状态生效。</small>
+                  <label>${escapeHtml(t("鼠标快速移开关闭气泡（档位）", "Fast Mouse Leave Closes Bubble (Profile)"))}</label>
+                  <small>${escapeHtml(t("仅在未固定且非交互状态生效。", "Only works when bubble is not pinned and not interacting."))}</small>
                 </div>
                 <div class="setting-toggle-control">
                   ${choiceGroupMarkup("interaction.bubble_fast_close_profile", bubbleFastCloseProfile, [
-                    { value: "off", label: "关闭" },
-                    { value: "loose", label: "宽松" },
-                    { value: "standard", label: "标准" },
-                    { value: "aggressive", label: "激进" },
+                    { value: "off", label: t("关闭", "Off") },
+                    { value: "loose", label: t("宽松", "Loose") },
+                    { value: "standard", label: t("标准", "Standard") },
+                    { value: "aggressive", label: t("激进", "Aggressive") },
                   ])}
                 </div>
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>点击气泡外区域关闭</label>
-                  <small>仅在未固定时生效。</small>
+                  <label>${escapeHtml(t("点击气泡外区域关闭", "Close Bubble on Outside Click"))}</label>
+                  <small>${escapeHtml(t("仅在未固定时生效。", "Only works when bubble is not pinned."))}</small>
                 </div>
                 <div class="setting-toggle-control">
                   ${choiceGroupMarkup("interaction.bubble_close_on_click_outside", String(bubbleCloseOnClickOutside), [
-                    { value: "true", label: "开启" },
-                    { value: "false", label: "关闭" },
+                    { value: "true", label: t("开启", "On") },
+                    { value: "false", label: t("关闭", "Off") },
                   ], "boolean")}
                 </div>
               </div>
               <div class="field setting-toggle-item">
                 <div class="setting-toggle-meta">
-                  <label>恢复最近关闭气泡快捷键</label>
-                  <small>快移关闭后 2 秒内可撤销恢复。</small>
+                  <label>${escapeHtml(t("恢复最近关闭气泡快捷键", "Restore Last Closed Bubble Shortcut"))}</label>
+                  <small>${escapeHtml(t("快移关闭后 2 秒内可撤销恢复。", "After fast-close, restore is available within 2 seconds."))}</small>
                 </div>
                 <div class="setting-toggle-control">
-                  <input class="shortcut-input" data-shortcut-field="interaction.bubble_restore_hotkey" value="${escapeHtml(bubbleRestoreHotkey)}" placeholder="按下新的快捷键组合" readonly />
+                  <input class="shortcut-input" data-shortcut-field="interaction.bubble_restore_hotkey" value="${escapeHtml(bubbleRestoreHotkey)}" placeholder="${escapeHtml(t("按下新的快捷键组合", "Press a new shortcut"))}" readonly />
                 </div>
               </div>
             </section>
@@ -1919,17 +2025,17 @@
         <div class="modal-backdrop" data-action="close-zoom"></div>
         <div class="modal-panel">
           <div class="modal-header" data-drag-handle="zoom-header">
-            <div class="modal-title">放大查看</div>
+            <div class="modal-title">${escapeHtml(t("放大查看", "Zoom View"))}</div>
             <button class="icon-button" data-action="close-zoom">${icons.close}</button>
           </div>
           <div class="zoom-shell" id="zoomShell" data-preserve-scroll="zoom-shell" data-autoscroll="zoom-shell">
             <div class="zoom-grid">
               <section class="zoom-section">
-                <div class="card-title">原文</div>
+                <div class="card-title">${escapeHtml(t("原文", "Source"))}</div>
                 <div class="zoom-text" id="zoomSource">${escapeHtml(state.zoomPayload?.sourceText || state.sourceText)}</div>
               </section>
               <section class="zoom-section">
-                <div class="card-title">译文</div>
+                <div class="card-title">${escapeHtml(t("译文", "Translation"))}</div>
                 <div class="zoom-text" id="zoomResult">${escapeHtml(state.zoomPayload?.resultText || state.resultText)}</div>
               </section>
             </div>
@@ -1958,7 +2064,7 @@
       result_text: "",
       pending: false,
       pinned: false,
-      action: "划词翻译",
+      action: t("划词翻译", "Selection Translate"),
       candidate_pending: false,
       candidate_items: [],
     };
@@ -1983,7 +2089,7 @@
     const bubbleCandidateRows = bubbleDisplayedCandidates.map((item, index) => `
       <div class="bubble-candidate-item">
         <div class="bubble-candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
-        <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="复制此候选">${icons.copy}</button>
+        <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="${escapeHtml(t("复制此候选", "Copy this candidate"))}">${icons.copy}</button>
       </div>
     `).join("");
     root.innerHTML = `
@@ -1991,14 +2097,14 @@
         <section class="bubble-card">
           <div class="panel-drag-hitbox" data-drag-handle="bubble-top"></div>
           <header class="bubble-header" data-drag-handle="bubble-header">
-            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="置顶">${icons.pin}</button>
-            <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble" aria-disabled="${bubbleCandidateDisabled ? "true" : "false"}" ${bubbleCandidateDisabled ? `data-tooltip="${escapeHtml(bubbleCandidateState.tip || "候选生成功能不可用")}"` : ""}>${icons.candidates}</button>
+            <button class="icon-button bubble-pin bubble-pin-corner ${bubble.pinned ? "active" : ""}" data-action="toggle-pin" aria-label="${escapeHtml(t("置顶", "Pin"))}">${icons.pin}</button>
+            <button class="icon-button bubble-candidate-toggle ${bubbleCandidateDisabled ? "disabled" : ""}" data-action="generate-candidates-bubble" aria-disabled="${bubbleCandidateDisabled ? "true" : "false"}" ${bubbleCandidateDisabled ? `data-tooltip="${escapeHtml(bubbleCandidateState.tip || t("候选生成功能不可用", "Candidate generation is unavailable"))}"` : ""}>${icons.candidates}</button>
             <div class="bubble-header-spacer" aria-hidden="true"></div>
             <div class="bubble-mode-switch">
-              <button class="mode-chip ${mode === "dictionary" ? "active" : ""} ${bubbleDictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="dictionary" aria-label="词典翻译" aria-disabled="${bubbleDictionaryModeAvailability.available ? "false" : "true"}" ${bubbleDictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleDictionaryModeAvailability.tip)}"`}>${icons.book}</button>
-              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="AI翻译" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
+              <button class="mode-chip ${mode === "dictionary" ? "active" : ""} ${bubbleDictionaryModeAvailability.available ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="dictionary" aria-label="${escapeHtml(t("词典翻译", "Dictionary"))}" aria-disabled="${bubbleDictionaryModeAvailability.available ? "false" : "true"}" ${bubbleDictionaryModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleDictionaryModeAvailability.tip)}"`}>${icons.book}</button>
+              <button class="mode-chip ${mode === "ai" ? "active" : ""} ${bubbleModeAiEnabled ? "" : "disabled"}" data-action="set-mode-bubble" data-mode="ai" aria-label="${escapeHtml(t("AI翻译", "AI"))}" aria-disabled="${bubbleAiModeAvailability.available ? "false" : "true"}" ${bubbleAiModeAvailability.available ? "" : `data-tooltip="${escapeHtml(bubbleAiModeAvailability.tip)}"`}>${icons.robot}</button>
             </div>
-            <button class="icon-button bubble-close" data-action="close-app" aria-label="关闭">${icons.close}</button>
+            <button class="icon-button bubble-close" data-action="close-app" aria-label="${escapeHtml(t("关闭", "Close"))}">${icons.close}</button>
           </header>
           <div class="bubble-content bubble-content-single">
             <div class="bubble-workbench ${showBubbleCandidatePane ? "with-candidates" : ""}">
@@ -2010,15 +2116,15 @@
               </div>
               <aside class="bubble-candidate-pane ${showBubbleCandidatePane ? "open" : ""}">
                 <div class="bubble-candidate-list">
-                  ${bubbleCandidateRows || `<div class="bubble-candidate-placeholder">点击顶部按钮生成候选</div>`}
-                  ${bubble.candidate_pending ? `<div class="bubble-candidate-placeholder">候选生成中...</div>` : ""}
+                  ${bubbleCandidateRows || `<div class="bubble-candidate-placeholder">${escapeHtml(t("点击顶部按钮生成候选", "Click top button to generate candidates"))}</div>`}
+                  ${bubble.candidate_pending ? `<div class="bubble-candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>` : ""}
                 </div>
               </aside>
             </div>
           </div>
           <div class="bubble-actions">
-            <button class="icon-button bubble-action-icon" data-action="copy-result" aria-label="复制">${icons.copy}</button>
-            <button class="icon-button bubble-action-icon" data-action="open-zoom-bubble" aria-label="放大查看">${icons.expand}</button>
+            <button class="icon-button bubble-action-icon" data-action="copy-result" aria-label="${escapeHtml(t("复制", "Copy"))}">${icons.copy}</button>
+            <button class="icon-button bubble-action-icon" data-action="open-zoom-bubble" aria-label="${escapeHtml(t("放大查看", "Zoom View"))}">${icons.expand}</button>
           </div>
         </section>
       </div>`;
@@ -2044,7 +2150,7 @@
     resultPane.classList.toggle("pending-streaming", Boolean(state.pending && state.resultText));
     resultPane.classList.toggle("pending-waiting", Boolean(state.pending && !state.resultText));
     if (statusText) {
-      statusText.textContent = state.ui.status || "就绪";
+      statusText.textContent = localizeBackendText(state.ui.status || t("就绪", "Ready"));
     }
     applyAutoScroll("main-result");
 
@@ -2072,7 +2178,7 @@
       candidateButton.removeAttribute("title");
       candidateButton.setAttribute("aria-disabled", disabled ? "true" : "false");
       if (disabled) {
-        candidateButton.dataset.tooltip = candidateState.tip || "候选生成功能不可用";
+        candidateButton.dataset.tooltip = candidateState.tip || t("候选生成功能不可用", "Candidate generation is unavailable");
       } else {
         delete candidateButton.dataset.tooltip;
       }
@@ -2089,7 +2195,7 @@
         mainModeDictionaryButton.setAttribute("aria-disabled", "false");
       } else {
         mainModeDictionaryButton.removeAttribute("title");
-        mainModeDictionaryButton.dataset.tooltip = "模式不可用，请检查配置";
+        mainModeDictionaryButton.dataset.tooltip = t("模式不可用，请检查配置", "Mode unavailable. Check your configuration.");
         mainModeDictionaryButton.setAttribute("aria-disabled", "true");
       }
     }
@@ -2101,7 +2207,7 @@
         mainModeAiButton.setAttribute("aria-disabled", "false");
       } else {
         mainModeAiButton.removeAttribute("title");
-        mainModeAiButton.dataset.tooltip = "模式不可用，请检查配置";
+        mainModeAiButton.dataset.tooltip = t("模式不可用，请检查配置", "Mode unavailable. Check your configuration.");
         mainModeAiButton.setAttribute("aria-disabled", "true");
       }
     }
@@ -2114,7 +2220,7 @@
         delete translateButton.dataset.tooltip;
       } else {
         translateButton.removeAttribute("title");
-        translateButton.dataset.tooltip = "无可用翻译模式，请检查配置";
+        translateButton.dataset.tooltip = t("无可用翻译模式，请检查配置", "No available translation mode. Check your configuration.");
       }
     }
     if (candidateList) {
@@ -2122,16 +2228,16 @@
         candidateList.innerHTML = displayedMainCandidates.map((item, index) => `
           <div class="candidate-item">
             <div class="candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
-            <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="复制此候选">${icons.copy}</button>
+            <button class="mini-button candidate-copy" data-action="copy-candidate-main" data-index="${index}" title="${escapeHtml(t("复制此候选", "Copy this candidate"))}">${icons.copy}</button>
           </div>
         `).join("");
         if (state.candidatePending) {
-          candidateList.innerHTML += `<div class="candidate-placeholder">候选生成中...</div>`;
+          candidateList.innerHTML += `<div class="candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>`;
         }
       } else {
         candidateList.innerHTML = state.candidatePending
-          ? `<div class="candidate-placeholder">候选生成中...</div>`
-          : `<div class="candidate-placeholder">点击右上角按钮生成候选</div>`;
+          ? `<div class="candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>`
+          : `<div class="candidate-placeholder">${escapeHtml(t("点击右上角按钮生成候选", "Click top-right button to generate candidates"))}</div>`;
       }
     }
     const footerCopy = document.querySelector('.footer-actions [data-action="copy-result"]');
@@ -2141,17 +2247,17 @@
       footerCopy.classList.toggle("disabled", !mainResultReady);
       footerCopy.setAttribute("aria-disabled", mainResultReady ? "false" : "true");
       if (mainResultReady) {
-        const hint = mainCopyAll ? "复制全部候选译文" : "";
+        const hint = mainCopyAll ? t("复制全部候选译文", "Copy all candidate translations") : "";
         if (hint) {
           footerCopy.title = hint;
           footerCopy.setAttribute("aria-label", hint);
         } else {
           footerCopy.removeAttribute("title");
-          footerCopy.setAttribute("aria-label", "复制");
+          footerCopy.setAttribute("aria-label", t("复制", "Copy"));
         }
       } else {
         footerCopy.removeAttribute("title");
-        footerCopy.setAttribute("aria-label", "复制");
+        footerCopy.setAttribute("aria-label", t("复制", "Copy"));
         delete footerCopy.dataset.tooltip;
       }
     }
@@ -2192,7 +2298,7 @@
         modeDictionary.setAttribute("aria-disabled", "false");
       } else {
         modeDictionary.removeAttribute("title");
-        modeDictionary.dataset.tooltip = "模式不可用，请检查配置";
+        modeDictionary.dataset.tooltip = t("模式不可用，请检查配置", "Mode unavailable. Check your configuration.");
         modeDictionary.setAttribute("aria-disabled", "true");
       }
     }
@@ -2206,7 +2312,7 @@
         modeAi.setAttribute("aria-disabled", "false");
       } else {
         modeAi.removeAttribute("title");
-        modeAi.dataset.tooltip = "模式不可用，请检查配置";
+        modeAi.dataset.tooltip = t("模式不可用，请检查配置", "Mode unavailable. Check your configuration.");
         modeAi.setAttribute("aria-disabled", "true");
       }
     }
@@ -2228,7 +2334,7 @@
       candidateBtn.removeAttribute("title");
       candidateBtn.setAttribute("aria-disabled", bubbleCandidateDisabled ? "true" : "false");
       if (bubbleCandidateDisabled) {
-        candidateBtn.dataset.tooltip = bubbleCandidateState.tip || "候选生成功能不可用";
+        candidateBtn.dataset.tooltip = bubbleCandidateState.tip || t("候选生成功能不可用", "Candidate generation is unavailable");
       } else {
         delete candidateBtn.dataset.tooltip;
       }
@@ -2249,16 +2355,16 @@
         candidateList.innerHTML = bubbleDisplayedCandidates.map((item, index) => `
           <div class="bubble-candidate-item">
             <div class="bubble-candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
-            <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="复制此候选">${icons.copy}</button>
+            <button class="mini-button bubble-candidate-copy" data-action="copy-candidate-bubble" data-index="${index}" title="${escapeHtml(t("复制此候选", "Copy this candidate"))}">${icons.copy}</button>
           </div>
         `).join("");
         if (state.bubble?.candidate_pending) {
-          candidateList.innerHTML += `<div class="bubble-candidate-placeholder">候选生成中...</div>`;
+          candidateList.innerHTML += `<div class="bubble-candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>`;
         }
       } else {
         candidateList.innerHTML = state.bubble?.candidate_pending
-          ? `<div class="bubble-candidate-placeholder">候选生成中...</div>`
-          : `<div class="bubble-candidate-placeholder">点击顶部按钮生成候选</div>`;
+          ? `<div class="bubble-candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>`
+          : `<div class="bubble-candidate-placeholder">${escapeHtml(t("点击顶部按钮生成候选", "Click top button to generate candidates"))}</div>`;
       }
     }
     applyAutoScroll("bubble-result");
@@ -2399,7 +2505,7 @@
           }
           const resp = await apiCall("set_mode", nextMode);
           if (resp && resp.ok === false) {
-            showToast("warning", resp.message || "模式切换失败");
+            showToast("warning", resp.message || t("模式切换失败", "Mode switch failed"));
           }
         }
         break;
@@ -2436,7 +2542,7 @@
         if (!patchBubbleDynamic()) rerender();
         const modeResp = await apiCall("set_mode", nextMode);
         if (modeResp && modeResp.ok === false) {
-          showToast("warning", modeResp.message || "模式切换失败");
+          showToast("warning", modeResp.message || t("模式切换失败", "Mode switch failed"));
           if (state.bubble) {
             state.bubble.mode = previousBubbleMode;
             state.bubble.pending = false;
@@ -2449,12 +2555,12 @@
         const sourceText = String(state.bubble?.source_text || "").trim();
         if (sourceText) {
           scrollFollowState["bubble-result"] = true;
-            await apiCall("translate", sourceText, state.bubble?.action || "划词翻译");
+            await apiCall("translate", sourceText, state.bubble?.action || t("划词翻译", "Selection Translate"));
         } else {
           if (state.bubble) {
             state.bubble.pending = false;
           }
-          showToast("warning", "当前无可翻译文本");
+          showToast("warning", t("当前无可翻译文本", "No translatable text right now"));
           if (!patchBubbleDynamic()) rerender();
         }
         break;
@@ -2505,7 +2611,7 @@
           }
         }
         scrollFollowState["main-result"] = true;
-        await apiCall("translate", state.sourceText, "翻译");
+        await apiCall("translate", state.sourceText, t("翻译", "Translate"));
         break;
       case "generate-candidates-main": {
         const availability = candidateAvailability({
@@ -2517,13 +2623,13 @@
           aiAvailableChecked: state.aiAvailableChecked,
         });
         if (!availability.enabled) {
-          showToast("warning", availability.tip || "候选生成功能不可用");
+          showToast("warning", availability.tip || t("候选生成功能不可用", "Candidate generation is unavailable"));
           break;
         }
         if ((state.config?.translation_mode || "dictionary") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
-            showToast("warning", modeResp.message || "模式切换失败");
+            showToast("warning", modeResp.message || t("模式切换失败", "Mode switch failed"));
             break;
           }
           if (state.config) state.config.translation_mode = "ai";
@@ -2536,7 +2642,7 @@
         const response = await apiCall("generate_multi_candidates", state.sourceText || "", state.resultText || "");
         if (response && response.ok === false) {
           state.candidatePending = false;
-          showToast("warning", response.message || "候选生成功能不可用");
+          showToast("warning", response.message || t("候选生成功能不可用", "Candidate generation is unavailable"));
           rerender();
         }
         break;
@@ -2552,13 +2658,13 @@
           aiAvailableChecked: state.aiAvailableChecked,
         });
         if (!availability.enabled) {
-          showToast("warning", availability.tip || "候选生成功能不可用");
+          showToast("warning", availability.tip || t("候选生成功能不可用", "Candidate generation is unavailable"));
           break;
         }
         if ((state.config?.translation_mode || state.ui?.translation_mode || "dictionary") !== "ai") {
           const modeResp = await apiCall("set_mode", "ai");
           if (modeResp && modeResp.ok === false) {
-            showToast("warning", modeResp.message || "模式切换失败");
+            showToast("warning", modeResp.message || t("模式切换失败", "Mode switch failed"));
             if (state.bubble) {
               state.bubble.candidate_pending = false;
             }
@@ -2580,7 +2686,7 @@
           if (state.bubble) {
             state.bubble.candidate_pending = false;
           }
-          showToast("warning", response.message || "候选生成功能不可用");
+          showToast("warning", response.message || t("候选生成功能不可用", "Candidate generation is unavailable"));
           if (!patchBubbleDynamic()) rerender();
         }
         break;
@@ -2668,7 +2774,7 @@
         try {
           const response = await apiCall("import_dictionary_model");
           if (!response) {
-            showToast("error", "导入入口不可用，请重试");
+            showToast("error", t("导入入口不可用，请重试", "Import entry unavailable, please try again"));
             break;
           }
           if (!response.ok) {
@@ -2678,10 +2784,10 @@
             }
             break;
           }
-          showToast("success", String(response.message || "已开始导入词典模型"));
+          showToast("success", String(response.message || t("已开始导入词典模型", "Dictionary model import started")));
         } catch (error) {
           const message = String(error?.message || "").trim();
-          showToast("error", message || "导入词典模型失败，请重试");
+          showToast("error", message || t("导入词典模型失败，请重试", "Dictionary model import failed, please try again"));
         }
         break;
       case "ollama-defaults":
@@ -2842,12 +2948,15 @@
     let shouldRerender = true;
     switch (event) {
       case "status":
-        state.ui.status = payload.text || "";
+        state.ui.status = localizeBackendText(payload.text || "");
         if (patchMainDynamic()) return;
         break;
       case "config-updated":
         if (payload.config) state.config = payload.config;
-        if (payload.ui) state.ui = payload.ui;
+        if (payload.ui) {
+          state.ui = payload.ui;
+          state.ui.status = localizeBackendText(state.ui.status || "");
+        }
         if (payload.settings) state.settings = payload.settings;
         if (payload.aiAvailability) {
           state.aiAvailable = Boolean(payload.aiAvailability.available);
@@ -2963,7 +3072,7 @@
           break;
         }
         state.candidatePending = false;
-        showToast("error", payload.message || "候选生成失败");
+        showToast("error", payload.message || t("候选生成失败", "Candidate generation failed"));
         if (patchMainDynamic()) return;
         break;
       case "history-updated":
@@ -2994,6 +3103,10 @@
         if (payload.trayMenu) {
           state.trayMenu = payload.trayMenu;
         }
+        if (payload.uiLanguage) {
+          if (!state.config) state.config = {};
+          state.config.ui_language = normalizeUiLanguage(payload.uiLanguage);
+        }
         if (payload.themeMode) {
           setTheme(payload.themeMode);
         }
@@ -3009,10 +3122,10 @@
         if (payload.config) state.config = payload.config;
         if (payload.settings) state.settings = payload.settings;
         state.settingsDraft = clone(state.config || {});
-        showToast("success", "词典模型已更新");
+        showToast("success", t("词典模型已更新", "Dictionary models updated"));
         break;
       case "dictionary-model-import-error":
-        showToast("error", payload.message || "模型导入失败");
+        showToast("error", payload.message || t("模型导入失败", "Model import failed"));
         break;
       case "zoom-open":
         state.zoomPayload = payload;
