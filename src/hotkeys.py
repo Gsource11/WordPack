@@ -30,6 +30,7 @@ VK_RSHIFT = 0xA1
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
+MOD_NOREPEAT = 0x4000
 
 HOTKEY_ID_SCREENSHOT = 1003
 HOTKEY_ID_RESTORE_BUBBLE = 1004
@@ -168,9 +169,30 @@ class HotkeyManager:
         self._shift_pressed: set[int] = set()
         self._shift_combo_used = False
         self._registered_hotkeys: list[int] = []
+        self._registered_hotkey_events: set[str] = set()
         self._configured_hotkeys: dict[str, tuple[int, int, str]] = {}
         self._hook_active_events: set[str] = set()
         self._last_hotkey_event_at: dict[str, float] = {}
+        self._double_tap_window_sec_cache = 0.35
+        self._double_tap_window_cached_at = 0.0
+
+    def is_running(self) -> bool:
+        with self._state_lock:
+            thread = self._thread
+            return bool(thread and thread.is_alive() and not self._stop_event.is_set())
+
+    def _double_tap_window_sec(self) -> float:
+        now = time.time()
+        if self._double_tap_window_cached_at > 0 and (now - self._double_tap_window_cached_at) <= 5.0:
+            return self._double_tap_window_sec_cache
+        try:
+            value_ms = int(user32.GetDoubleClickTime())
+        except Exception:
+            value_ms = 350
+        value_sec = max(0.20, min(0.80, float(value_ms) / 1000.0))
+        self._double_tap_window_sec_cache = value_sec
+        self._double_tap_window_cached_at = now
+        return value_sec
 
     def _safe_callback(self, event: str, payload) -> None:
         try:
@@ -226,6 +248,9 @@ class HotkeyManager:
 
         active_modifiers = self._current_modifier_mask()
         for event_name, (modifiers, key_vk, _label) in configured_hotkeys.items():
+            if event_name in self._registered_hotkey_events:
+                self._hook_active_events.discard(event_name)
+                continue
             if int(key_vk) != int(vk_code):
                 continue
             if int(modifiers) != int(active_modifiers):
@@ -277,9 +302,20 @@ class HotkeyManager:
                 "toggle_main_window": "",
             }
             shortcut_map.update(self.shortcut_getter() or {})
+            self._registered_hotkeys.clear()
+            self._registered_hotkey_events.clear()
             self._configured_hotkeys = {}
             self._hook_active_events.clear()
             self._last_hotkey_event_at.clear()
+            self._ctrl_pressed.clear()
+            self._alt_pressed.clear()
+            self._shift_pressed.clear()
+            self._ctrl_combo_used = False
+            self._alt_combo_used = False
+            self._shift_combo_used = False
+            self._last_ctrl_at = 0.0
+            self._last_alt_at = 0.0
+            self._last_shift_at = 0.0
 
             for hotkey_id, event_name in HOTKEY_EVENT_MAP.items():
                 parsed = parse_shortcut(shortcut_map.get(event_name, ""))
@@ -287,9 +323,14 @@ class HotkeyManager:
                     continue
                 modifiers, vk, label = parsed
                 self._configured_hotkeys[event_name] = (modifiers, vk, label)
-                if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                if user32.RegisterHotKey(None, hotkey_id, int(modifiers | MOD_NOREPEAT), vk):
                     self._registered_hotkeys.append(hotkey_id)
-                    logger.info("Registered hotkey %s", label)
+                    self._registered_hotkey_events.add(event_name)
+                    logger.info("Registered hotkey %s (norepeat=on)", label)
+                elif user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                    self._registered_hotkeys.append(hotkey_id)
+                    self._registered_hotkey_events.add(event_name)
+                    logger.info("Registered hotkey %s (norepeat=off)", label)
                 else:
                     self._safe_callback("status", f"全局热键注册失败：{label} 已被占用")
 
@@ -336,6 +377,7 @@ class HotkeyManager:
             for hotkey_id in self._registered_hotkeys:
                 user32.UnregisterHotKey(None, hotkey_id)
             self._registered_hotkeys.clear()
+            self._registered_hotkey_events.clear()
             self._configured_hotkeys.clear()
             self._hook_active_events.clear()
             self._last_hotkey_event_at.clear()
@@ -352,6 +394,7 @@ class HotkeyManager:
                 is_ctrl = kb.vkCode in (VK_LCONTROL, VK_RCONTROL)
                 is_alt = kb.vkCode in (VK_LMENU, VK_RMENU)
                 is_shift = kb.vkCode in (VK_LSHIFT, VK_RSHIFT)
+                double_tap_window = self._double_tap_window_sec()
 
                 if is_key_down and is_ctrl:
                     if not self._ctrl_pressed:
@@ -366,7 +409,7 @@ class HotkeyManager:
                     if had_ctrl_pressed and not self._ctrl_pressed:
                         if not self._ctrl_combo_used:
                             now = time.time()
-                            if now - self._last_ctrl_at <= 0.35:
+                            if now - self._last_ctrl_at <= double_tap_window:
                                 self._dispatch_callback("double_ctrl_selection", None)
                             self._last_ctrl_at = now
                         self._ctrl_combo_used = False
@@ -384,7 +427,7 @@ class HotkeyManager:
                     if had_alt_pressed and not self._alt_pressed:
                         if not self._alt_combo_used:
                             now = time.time()
-                            if now - self._last_alt_at <= 0.35:
+                            if now - self._last_alt_at <= double_tap_window:
                                 self._dispatch_callback("double_alt_selection", None)
                             self._last_alt_at = now
                         self._alt_combo_used = False
@@ -402,7 +445,7 @@ class HotkeyManager:
                     if had_shift_pressed and not self._shift_pressed:
                         if not self._shift_combo_used:
                             now = time.time()
-                            if now - self._last_shift_at <= 0.35:
+                            if now - self._last_shift_at <= double_tap_window:
                                 self._dispatch_callback("double_shift_selection", None)
                             self._last_shift_at = now
                         self._shift_combo_used = False

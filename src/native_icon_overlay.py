@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Callable
 
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
-kernel32 = ctypes.windll.kernel32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
@@ -41,7 +41,7 @@ IDC_ARROW = 32512
 BI_RGB = 0
 DIB_RGB_COLORS = 0
 
-WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class WNDCLASSW(ctypes.Structure):
@@ -96,6 +96,107 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
 
 
+def _coerce_hwnd(value) -> wintypes.HWND:
+    if value is None:
+        return wintypes.HWND(0)
+    try:
+        return wintypes.HWND(int(value))
+    except Exception:
+        return wintypes.HWND(0)
+
+
+def _int_resource(resource_id: int):
+    return ctypes.cast(ctypes.c_void_p(int(resource_id)), wintypes.LPCWSTR)
+
+
+def _configure_winapi_signatures() -> None:
+    try:
+        user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+        user32.RegisterClassW.restype = wintypes.ATOM
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HMENU,
+            wintypes.HINSTANCE,
+            wintypes.LPVOID,
+        ]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostMessageW.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.GetDC.restype = wintypes.HDC
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        user32.ReleaseDC.restype = ctypes.c_int
+        user32.UpdateLayeredWindow.argtypes = [
+            wintypes.HWND,
+            wintypes.HDC,
+            ctypes.POINTER(POINT),
+            ctypes.POINTER(SIZE),
+            wintypes.HDC,
+            ctypes.POINTER(POINT),
+            wintypes.COLORREF,
+            ctypes.POINTER(BLENDFUNCTION),
+            wintypes.DWORD,
+        ]
+        user32.UpdateLayeredWindow.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user32.GetMessageW.restype = ctypes.c_int
+        user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.TranslateMessage.restype = wintypes.BOOL
+        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.DispatchMessageW.restype = ctypes.c_ssize_t
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
+        user32.LoadCursorW.restype = wintypes.HANDLE
+
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateDIBSection.argtypes = [
+            wintypes.HDC,
+            ctypes.POINTER(BITMAPINFO),
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.HANDLE,
+            wintypes.DWORD,
+        ]
+        gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteObject.restype = wintypes.BOOL
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+        gdi32.DeleteDC.restype = wintypes.BOOL
+    except Exception:
+        # This module should stay resilient in restricted environments.
+        pass
+
+
+_configure_winapi_signatures()
+
+
 class NativeIconOverlay:
     def __init__(
         self,
@@ -133,19 +234,19 @@ class NativeIconOverlay:
             self._ensure_thread()
             hwnd = self._wait_hwnd(timeout=0.8)
         if hwnd:
-            user32.PostMessageW(hwnd, WM_APP_SHOW, 0, 0)
+            user32.PostMessageW(_coerce_hwnd(hwnd), WM_APP_SHOW, 0, 0)
 
     def hide(self) -> None:
         hwnd = self._wait_hwnd(timeout=0.02)
         if hwnd:
-            user32.PostMessageW(hwnd, WM_APP_HIDE, 0, 0)
+            user32.PostMessageW(_coerce_hwnd(hwnd), WM_APP_HIDE, 0, 0)
         with self._lock:
             self._visible = False
 
     def destroy(self) -> None:
         hwnd = self._wait_hwnd(timeout=0.05)
         if hwnd:
-            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            user32.PostMessageW(_coerce_hwnd(hwnd), WM_CLOSE, 0, 0)
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=1.0)
@@ -184,7 +285,7 @@ class NativeIconOverlay:
             wc.cbWndExtra = 0
             wc.hInstance = h_instance
             wc.hIcon = 0
-            wc.hCursor = user32.LoadCursorW(0, ctypes.c_void_p(IDC_ARROW))
+            wc.hCursor = user32.LoadCursorW(0, _int_resource(IDC_ARROW))
             wc.hbrBackground = 0
             wc.lpszMenuName = None
             wc.lpszClassName = self._class_name
@@ -236,7 +337,7 @@ class NativeIconOverlay:
             threading.Thread(target=self._safe_click, daemon=True).start()
             return 0
         if msg == WM_SETCURSOR:
-            user32.SetCursor(user32.LoadCursorW(0, ctypes.c_void_p(IDC_ARROW)))
+            user32.SetCursor(user32.LoadCursorW(0, _int_resource(IDC_ARROW)))
             return 1
         if msg == WM_DESTROY:
             user32.PostQuitMessage(0)
@@ -255,8 +356,17 @@ class NativeIconOverlay:
                 x = int(self._x)
                 y = int(self._y)
             self._update_layered(hwnd, x, y)
-            user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            hwnd_value = _coerce_hwnd(hwnd)
+            user32.ShowWindow(hwnd_value, SW_SHOWNOACTIVATE)
+            user32.SetWindowPos(
+                hwnd_value,
+                wintypes.HWND(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
             with self._lock:
                 self._visible = True
         except Exception:
@@ -274,14 +384,15 @@ class NativeIconOverlay:
         bmi.bmiHeader.biCompression = BI_RGB
 
         bits = ctypes.c_void_p()
-        hdc_screen = user32.GetDC(0)
+        hwnd_value = _coerce_hwnd(hwnd)
+        hdc_screen = user32.GetDC(wintypes.HWND(0))
         hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
         hbitmap = gdi32.CreateDIBSection(hdc_screen, ctypes.byref(bmi), DIB_RGB_COLORS, ctypes.byref(bits), 0, 0)
         if not hbitmap or not bits:
             if hdc_mem:
                 gdi32.DeleteDC(hdc_mem)
             if hdc_screen:
-                user32.ReleaseDC(0, hdc_screen)
+                user32.ReleaseDC(wintypes.HWND(0), hdc_screen)
             return
 
         ctypes.memmove(bits, self._bgra, len(self._bgra))
@@ -292,7 +403,7 @@ class NativeIconOverlay:
         pt_src = POINT(0, 0)
         blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
         user32.UpdateLayeredWindow(
-            hwnd,
+            hwnd_value,
             hdc_screen,
             ctypes.byref(pt_dst),
             ctypes.byref(size),
@@ -306,7 +417,7 @@ class NativeIconOverlay:
         gdi32.SelectObject(hdc_mem, old_obj)
         gdi32.DeleteObject(hbitmap)
         gdi32.DeleteDC(hdc_mem)
-        user32.ReleaseDC(0, hdc_screen)
+        user32.ReleaseDC(wintypes.HWND(0), hdc_screen)
 
     def _load_icon_surface(self) -> bytes:
         w = self._window_size

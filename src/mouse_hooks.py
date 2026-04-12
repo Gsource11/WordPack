@@ -48,6 +48,7 @@ class MouseHookManager:
     def __init__(self, callback, logger: logging.Logger | None = None) -> None:
         self.callback = callback
         self.logger = logger or logging.getLogger(__name__)
+        self._state_lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
         self._stop_event = threading.Event()
@@ -59,93 +60,143 @@ class MouseHookManager:
         self._last_down_at = 0.0
         self._last_up_pos: tuple[int, int] | None = None
         self._click_count = 0
+        self._double_tap_window_sec_cache = 0.35
+        self._double_tap_window_cached_at = 0.0
+
+    def is_running(self) -> bool:
+        with self._state_lock:
+            thread = self._thread
+            return bool(thread and thread.is_alive() and not self._stop_event.is_set())
+
+    def _double_tap_window_sec(self) -> float:
+        now = time.time()
+        if self._double_tap_window_cached_at > 0 and (now - self._double_tap_window_cached_at) <= 5.0:
+            return self._double_tap_window_sec_cache
+        try:
+            value_ms = int(user32.GetDoubleClickTime())
+        except Exception:
+            value_ms = 350
+        value_sec = max(0.20, min(0.80, float(value_ms) / 1000.0))
+        self._double_tap_window_sec_cache = value_sec
+        self._double_tap_window_cached_at = now
+        return value_sec
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        with self._state_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread_id:
-            user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
-        if self._thread:
-            self._thread.join(timeout=1.2)
+        with self._state_lock:
+            self._stop_event.set()
+            thread_id = int(self._thread_id or 0)
+            thread = self._thread
+        if thread_id:
+            user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0)
+        if thread:
+            thread.join(timeout=1.2)
+        with self._state_lock:
+            if self._thread is thread and (thread is None or not thread.is_alive()):
+                self._thread = None
+                self._thread_id = 0
 
     def _loop(self) -> None:
-        self._thread_id = kernel32.GetCurrentThreadId()
+        with self._state_lock:
+            self._thread_id = kernel32.GetCurrentThreadId()
+        try:
+            self._mouse_proc = LowLevelMouseProc(self._mouse_callback)
+            self._mouse_hook = user32.SetWindowsHookExW(
+                WH_MOUSE_LL,
+                self._mouse_proc,
+                kernel32.GetModuleHandleW(None),
+                0,
+            )
+            if not self._mouse_hook:
+                self._mouse_hook = user32.SetWindowsHookExW(
+                    WH_MOUSE_LL,
+                    self._mouse_proc,
+                    None,
+                    0,
+                )
+            if not self._mouse_hook:
+                self.logger.warning("Mouse hook install failed")
+                return
 
-        self._mouse_proc = LowLevelMouseProc(self._mouse_callback)
-        self._mouse_hook = user32.SetWindowsHookExW(
-            WH_MOUSE_LL,
-            self._mouse_proc,
-            kernel32.GetModuleHandleW(None),
-            0,
-        )
-
-        msg = MSG()
-        while not self._stop_event.is_set():
-            code = user32.GetMessageW(byref(msg), None, 0, 0)
-            if code <= 0:
-                break
-            user32.TranslateMessage(byref(msg))
-            user32.DispatchMessageW(byref(msg))
-
-        if self._mouse_hook:
-            user32.UnhookWindowsHookEx(self._mouse_hook)
-            self._mouse_hook = None
+            msg = MSG()
+            while not self._stop_event.is_set():
+                code = user32.GetMessageW(byref(msg), None, 0, 0)
+                if code <= 0:
+                    break
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
+        finally:
+            if self._mouse_hook:
+                user32.UnhookWindowsHookEx(self._mouse_hook)
+                self._mouse_hook = None
+            with self._state_lock:
+                if self._thread and (threading.current_thread() is self._thread):
+                    self._thread = None
+                self._thread_id = 0
 
     def _mouse_callback(self, n_code: int, w_param: int, l_param: int) -> int:
-        if n_code >= 0:
-            ms = cast(l_param, POINTER(MSLLHOOKSTRUCT)).contents
-            now = time.time()
-            x, y = int(ms.pt.x), int(ms.pt.y)
+        try:
+            if n_code >= 0:
+                ms = cast(l_param, POINTER(MSLLHOOKSTRUCT)).contents
+                now = time.time()
+                x, y = int(ms.pt.x), int(ms.pt.y)
+                double_tap_window = self._double_tap_window_sec()
 
-            if w_param == WM_LBUTTONDOWN:
-                self._last_down_pos = (x, y)
-                self._last_down_at = now
+                if w_param == WM_LBUTTONDOWN:
+                    self._last_down_pos = (x, y)
+                    self._last_down_at = now
 
-            if w_param == WM_LBUTTONUP:
-                pair_distance = 0
-                if self._last_up_pos is not None:
-                    pair_distance = abs(x - int(self._last_up_pos[0])) + abs(y - int(self._last_up_pos[1]))
-                if now - self._last_left_up <= 0.35 and pair_distance <= 28:
-                    self._click_count += 1
-                else:
-                    self._click_count = 1
+                if w_param == WM_LBUTTONUP:
+                    pair_distance = 0
+                    if self._last_up_pos is not None:
+                        pair_distance = abs(x - int(self._last_up_pos[0])) + abs(y - int(self._last_up_pos[1]))
+                    if now - self._last_left_up <= double_tap_window and pair_distance <= 28:
+                        self._click_count += 1
+                    else:
+                        self._click_count = 1
 
-                down = self._last_down_pos
-                moved = abs(x - down[0]) + abs(y - down[1]) if down else 0
-                hold_ms = int(max(0.0, (now - float(self._last_down_at or now))) * 1000.0)
-                # Ignore tiny pointer jitter on normal click release.
-                should_emit = moved >= 4 or self._click_count >= 2
-                if should_emit:
-                    down_x = int(down[0]) if down else int(x)
-                    down_y = int(down[1]) if down else int(y)
-                    payload = {
-                        "x": int(x),
-                        "y": int(y),
-                        "down_x": down_x,
-                        "down_y": down_y,
-                        "moved": int(moved),
-                        "click_count": int(self._click_count),
-                        "down_ts": float(self._last_down_at or 0.0),
-                        "up_ts": float(now),
-                        "hold_ms": int(hold_ms),
-                        "ts": now,
-                    }
-                    try:
-                        self.callback("selection_mouse_up", payload)
-                    except Exception:
-                        # Keep hook callback resilient; one app-side exception should not break future mouse events.
-                        self.logger.exception("Mouse hook callback failed for selection_mouse_up")
-                    self._click_count = 0
+                    down = self._last_down_pos
+                    moved = abs(x - down[0]) + abs(y - down[1]) if down else 0
+                    hold_ms = int(max(0.0, (now - float(self._last_down_at or now))) * 1000.0)
+                    # Ignore tiny pointer jitter on normal click release.
+                    should_emit = moved >= 4 or self._click_count >= 2
+                    if should_emit:
+                        down_x = int(down[0]) if down else int(x)
+                        down_y = int(down[1]) if down else int(y)
+                        payload = {
+                            "x": int(x),
+                            "y": int(y),
+                            "down_x": down_x,
+                            "down_y": down_y,
+                            "moved": int(moved),
+                            "click_count": int(self._click_count),
+                            "down_ts": float(self._last_down_at or 0.0),
+                            "up_ts": float(now),
+                            "hold_ms": int(hold_ms),
+                            "ts": now,
+                        }
+                        try:
+                            self.callback("selection_mouse_up", payload)
+                        except Exception:
+                            # Keep hook callback resilient; one app-side exception should not break future mouse events.
+                            self.logger.exception("Mouse hook callback failed for selection_mouse_up")
+                        self._click_count = 0
 
-                self._last_left_up = now
-                self._last_up_pos = (x, y)
-                self._last_down_pos = None
-                self._last_down_at = 0.0
-
-        return user32.CallNextHookEx(self._mouse_hook, n_code, w_param, l_param)
+                    self._last_left_up = now
+                    self._last_up_pos = (x, y)
+                    self._last_down_pos = None
+                    self._last_down_at = 0.0
+        except Exception:
+            self.logger.exception("Mouse hook callback failed")
+        try:
+            return int(user32.CallNextHookEx(self._mouse_hook or 0, n_code, w_param, l_param))
+        except Exception:
+            self.logger.exception("CallNextHookEx failed in mouse callback; fall back to pass-through")
+            return 0

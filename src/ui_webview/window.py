@@ -214,6 +214,11 @@ class WordPackWebviewApp:
         self._last_selection_trigger_at = 0.0
         self._last_selection_translate_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
+        self._global_input_watchdog_last_at = 0.0
+        self._global_input_recover_last_at = 0.0
+        self._input_poll_last_tick_at = 0.0
+        self._system_double_click_sec_cache = 0.35
+        self._system_double_click_cached_at = 0.0
         self._dpi_scale_cache = 1.0
         self._dpi_scale_cached_at = 0.0
         self._main_window_geometry_before_zoom: tuple[int, int, int, int] | None = None
@@ -1118,6 +1123,9 @@ class WordPackWebviewApp:
             self.logger.exception("Failed to prepare main window on startup")
         self._start_selection_runtime_warmup()
         self._start_input_polling()
+        self._reset_fallback_input_state()
+        self._global_input_watchdog_last_at = 0.0
+        self._global_input_recover_last_at = 0.0
         if self._should_probe_ai_on_startup():
             self._probe_ai_availability_async()
         self._start_ai_probe_loop()
@@ -4288,10 +4296,95 @@ class WordPackWebviewApp:
             self.logger.exception("Failed to show main window via hotkey")
             return {"ok": False, "message": "主窗口显示失败"}
 
+    def _system_double_click_window_sec(self) -> float:
+        now = time.time()
+        if self._system_double_click_cached_at > 0 and (now - self._system_double_click_cached_at) <= 5.0:
+            return self._system_double_click_sec_cache
+        try:
+            value_ms = int(ctypes.windll.user32.GetDoubleClickTime())
+        except Exception:
+            value_ms = 350
+        value_sec = max(0.20, min(0.80, float(value_ms) / 1000.0))
+        self._system_double_click_sec_cache = value_sec
+        self._system_double_click_cached_at = now
+        return value_sec
+
+    def _reset_fallback_input_state(self) -> None:
+        self._fb_last_lbtn_down = False
+        self._fb_last_rbtn_down = False
+        self._fb_lbtn_down_pos = None
+        self._fb_lbtn_down_at = 0.0
+        self._fb_last_lbtn_up_at = 0.0
+        self._fb_last_lbtn_up_pos = None
+        self._fb_lbtn_click_count = 0
+        self._fb_last_ctrl_down = False
+        self._fb_last_alt_down = False
+        self._fb_last_shift_down = False
+        self._fb_ctrl_combo_used = False
+        self._fb_alt_combo_used = False
+        self._fb_shift_combo_used = False
+        self._fb_last_escape_down = False
+        self._fb_last_ctrl_tap_at = 0.0
+        self._fb_last_alt_tap_at = 0.0
+        self._fb_last_shift_tap_at = 0.0
+        self._fb_last_combo_s = False
+
+    def _recover_global_input_services(self, *, reason: str, force_restart: bool = False) -> None:
+        if self._shutting_down:
+            return
+        now = time.time()
+        if (now - self._global_input_recover_last_at) <= 1.2:
+            return
+        self._global_input_recover_last_at = now
+
+        actions: list[str] = []
+        try:
+            if force_restart:
+                self.hotkeys.stop()
+                self.hotkeys.start()
+                actions.append("hotkeys-restart")
+            elif not self.hotkeys.is_running():
+                self.hotkeys.start()
+                actions.append("hotkeys-start")
+        except Exception:
+            self.logger.exception("Failed recovering hotkeys reason=%s force=%s", reason, bool(force_restart))
+
+        try:
+            if force_restart:
+                self.mouse_hooks.stop()
+                self.mouse_hooks.start()
+                actions.append("mouse-restart")
+            elif not self.mouse_hooks.is_running():
+                self.mouse_hooks.start()
+                actions.append("mouse-start")
+        except Exception:
+            self.logger.exception("Failed recovering mouse hooks reason=%s force=%s", reason, bool(force_restart))
+
+        if actions:
+            self.logger.warning("Recovered global input services reason=%s actions=%s", reason, ",".join(actions))
+
+    def _watch_global_input_services(self, now: float) -> None:
+        if self._shutting_down:
+            return
+        if (now - self._global_input_watchdog_last_at) < 2.0:
+            return
+        self._global_input_watchdog_last_at = now
+        hotkeys_running = bool(self.hotkeys.is_running())
+        mouse_running = bool(self.mouse_hooks.is_running())
+        if hotkeys_running and mouse_running:
+            return
+        self.logger.warning(
+            "Global input service inactive hotkeys=%s mouse=%s",
+            hotkeys_running,
+            mouse_running,
+        )
+        self._recover_global_input_services(reason="watchdog-inactive", force_restart=False)
+
     def _start_input_polling(self) -> None:
         if self._input_poll_thread is not None and self._input_poll_thread.is_alive():
             return
         self._input_poll_stop.clear()
+        self._input_poll_last_tick_at = 0.0
         self._input_poll_thread = threading.Thread(target=self._poll_input_loop, name="wordpack-input-poll", daemon=True)
         self._input_poll_thread.start()
 
@@ -4789,6 +4882,18 @@ class WordPackWebviewApp:
         while not self._input_poll_stop.is_set():
             try:
                 now = time.time()
+                last_tick = float(self._input_poll_last_tick_at or 0.0)
+                self._input_poll_last_tick_at = now
+                screenshot_flow_active = bool(self._screenshot_starting or (self._screenshot_session is not None))
+                if last_tick > 0 and (now - last_tick) >= 6.0 and (not screenshot_flow_active):
+                    self.logger.info("Input polling gap detected; recovering hooks gap=%.3f", now - last_tick)
+                    self._recover_global_input_services(
+                        reason=f"poll-gap-{now - last_tick:.3f}s",
+                        force_restart=True,
+                    )
+                    self._reset_fallback_input_state()
+                self._watch_global_input_services(now)
+                double_tap_window = self._system_double_click_window_sec()
                 point = POINT()
                 has_pos = bool(windll.user32.GetCursorPos(byref(point)))
                 cursor_x = int(point.x) if has_pos else 0
@@ -4847,7 +4952,7 @@ class WordPackWebviewApp:
                             )
 
                         if (
-                            now - self._fb_last_lbtn_up_at <= 0.35
+                            now - self._fb_last_lbtn_up_at <= double_tap_window
                             and pair_distance <= self._selection_click_pair_distance_px()
                         ):
                             self._fb_lbtn_click_count += 1
@@ -4887,7 +4992,7 @@ class WordPackWebviewApp:
                     self._fb_ctrl_combo_used = True
 
                 if (not screenshot_guard) and self._fb_last_ctrl_down and not ctrl_down:
-                    if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= 0.35:
+                    if not self._fb_ctrl_combo_used and now - self._fb_last_ctrl_tap_at <= double_tap_window:
                         if self._can_trigger_selection_by_mode("double_ctrl") and not self._is_our_window_foreground():
                             self._trigger_selection_translate_debounced(source="poll:double_ctrl")
                     if not self._fb_ctrl_combo_used:
@@ -4900,7 +5005,7 @@ class WordPackWebviewApp:
                     self._fb_alt_combo_used = True
 
                 if (not screenshot_guard) and self._fb_last_alt_down and not alt_down:
-                    if not self._fb_alt_combo_used and now - self._fb_last_alt_tap_at <= 0.35:
+                    if not self._fb_alt_combo_used and now - self._fb_last_alt_tap_at <= double_tap_window:
                         if self._can_trigger_selection_by_mode("double_alt") and not self._is_our_window_foreground():
                             self._trigger_selection_translate_debounced(source="poll:double_alt")
                     if not self._fb_alt_combo_used:
@@ -4913,14 +5018,14 @@ class WordPackWebviewApp:
                     self._fb_shift_combo_used = True
 
                 if (not screenshot_guard) and self._fb_last_shift_down and not shift_down:
-                    if not self._fb_shift_combo_used and now - self._fb_last_shift_tap_at <= 0.35:
+                    if not self._fb_shift_combo_used and now - self._fb_last_shift_tap_at <= double_tap_window:
                         if self._can_trigger_selection_by_mode("double_shift") and not self._is_our_window_foreground():
                             self._trigger_selection_translate_debounced(source="poll:double_shift")
                     if not self._fb_shift_combo_used:
                         self._fb_last_shift_tap_at = now
 
                 combo_s = False
-                if (not screenshot_guard) and self.config.interaction.screenshot_enabled:
+                if (not screenshot_guard) and self.config.interaction.screenshot_enabled and (not self.hotkeys.is_running()):
                     combo_s = self._shortcut_is_active(
                         self.config.interaction.screenshot_hotkey,
                         ctrl_down=ctrl_down,
