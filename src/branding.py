@@ -28,6 +28,11 @@ def icon_data_url() -> str:
     return ""
 
 
+def app_title_for_ui_language(ui_language: str | None) -> str:
+    text = str(ui_language or "zh-cn").strip().lower()
+    return APP_NAME_EN if text in {"en", "en-us"} else APP_NAME_ZH
+
+
 def ensure_icon_ico() -> Path | None:
     ico_path = icon_path("app-icon.ico")
     png_path = icon_path("app-icon.png")

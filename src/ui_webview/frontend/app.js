@@ -2862,6 +2862,10 @@
         if (patchMainDynamic()) return;
         break;
       case "config-updated":
+        if (payload.appTitle) {
+          state.appTitle = String(payload.appTitle || "").trim() || "WordPack";
+          document.title = state.appTitle;
+        }
         if (payload.config) state.config = payload.config;
         if (payload.ui) {
           state.ui = payload.ui;
@@ -3010,6 +3014,10 @@
         if (state.view === "tray") break;
         break;
       case "tray-menu-updated":
+        if (payload.appTitle) {
+          state.appTitle = String(payload.appTitle || "").trim() || "WordPack";
+          document.title = state.appTitle;
+        }
         if (payload.trayMenu) {
           state.trayMenu = payload.trayMenu;
         }

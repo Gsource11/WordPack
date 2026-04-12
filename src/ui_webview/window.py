@@ -18,7 +18,7 @@ from typing import Any, Callable
 import webview
 
 from src.app_logging import APP_RUNTIME_DIR, APP_USER_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
-from src.branding import APP_TITLE, ensure_icon_ico, icon_data_url, icon_path
+from src.branding import APP_TITLE, app_title_for_ui_language, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore, SelectionAppProfile
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
@@ -71,6 +71,14 @@ class WordPackWebviewApp:
     WEBVIEW2_DOWNLOAD_PAGE = "https://developer.microsoft.com/microsoft-edge/webview2/"
     STARTUP_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
     STARTUP_RUN_VALUE_NAME = "WordPack"
+
+    def _app_title(self, ui_language: str | None = None) -> str:
+        language = (
+            ConfigStore._normalize_ui_language(ui_language)
+            if ui_language is not None
+            else ConfigStore._normalize_ui_language(getattr(self.config, "ui_language", "zh-CN"))
+        )
+        return app_title_for_ui_language(language)
 
     def __init__(self) -> None:
         if getattr(sys, "frozen", False):
@@ -135,7 +143,7 @@ class WordPackWebviewApp:
         )
         tray_icon = self._app_icon_ico or icon_path("app-icon.ico")
         self.tray_icon = TrayIconManager(
-            title=APP_TITLE,
+            title=self._app_title(),
             icon_path=str(tray_icon),
             on_action=self._on_tray_action,
             logger=self.logger,
@@ -1435,10 +1443,11 @@ class WordPackWebviewApp:
         self._clear_screenshot_background_image()
 
     def bootstrap_window(self, kind: str) -> dict[str, Any]:
+        app_title = self._app_title()
         if kind == "main":
             return {
                 "view": "main",
-                "appTitle": APP_TITLE,
+                "appTitle": app_title,
                 "branding": self._branding_payload(),
                 "ui": self.ui_state.to_payload(),
                 "config": self._serialize_config(),
@@ -1466,7 +1475,7 @@ class WordPackWebviewApp:
         if kind == "tray":
             return {
                 "view": "tray",
-                "appTitle": APP_TITLE,
+                "appTitle": app_title,
                 "branding": self._branding_payload(),
                 "config": self._serialize_config(),
                 "themeMode": self._resolved_theme_mode(),
@@ -1762,6 +1771,7 @@ class WordPackWebviewApp:
             "tray",
             "tray-menu-updated",
             {
+                "appTitle": self._app_title(),
                 "themeMode": self._resolved_theme_mode(),
                 "uiLanguage": str(getattr(self.config, "ui_language", "zh-CN") or "zh-CN"),
                 "trayMenu": self._tray_menu_payload(),
@@ -2018,6 +2028,7 @@ class WordPackWebviewApp:
 
     def _config_event_payload(self) -> dict[str, Any]:
         return {
+            "appTitle": self._app_title(),
             "config": self._serialize_config(),
             "ui": self.ui_state.to_payload(),
             "settings": self.get_settings_payload(),
