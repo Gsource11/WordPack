@@ -3741,10 +3741,12 @@ class WordPackWebviewApp:
         mode, _icon_trigger, _exe = self._resolve_selection_profile()
         return mode == expected_mode
 
-    def _ensure_selection_candidate_for_translate(self) -> SelectionCandidate | None:
+    def _ensure_selection_candidate_for_translate(self, *, allow_fallback: bool = True) -> SelectionCandidate | None:
         candidate = self._selection_candidate
         if self._is_selection_candidate_fresh(candidate):
             return candidate
+        if not allow_fallback:
+            return None
 
         cursor_x, cursor_y = get_cursor_position()
         fallback_candidate = self._build_selection_candidate(
@@ -3764,6 +3766,10 @@ class WordPackWebviewApp:
         with self.lock:
             self._selection_candidate = fallback_candidate
         return fallback_candidate
+
+    def _clear_selection_candidate(self) -> None:
+        with self.lock:
+            self._selection_candidate = SelectionCandidate()
 
     def _fast_verify_selection_candidate(self, candidate: SelectionCandidate) -> bool:
         timeout_ms = max(20, min(300, int(self.config.interaction.selection_verify_timeout_ms or 80)))
@@ -3788,17 +3794,30 @@ class WordPackWebviewApp:
         return self._translate_pending_selection()
 
     def _translate_pending_selection(self) -> dict[str, Any]:
-        candidate = self._ensure_selection_candidate_for_translate()
+        existing_candidate = self._selection_candidate
+        trigger_mode = (
+            str(getattr(existing_candidate, "trigger_mode", "") or "").strip().lower()
+            if self._is_selection_candidate_fresh(existing_candidate)
+            else str(self._resolve_selection_profile()[0] or "icon").strip().lower()
+        )
+        if trigger_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
+            trigger_mode = "icon"
+        candidate = self._ensure_selection_candidate_for_translate(allow_fallback=(trigger_mode == "icon"))
+        show_failure_bubble = trigger_mode == "icon"
+        allow_cached_text = trigger_mode == "icon"
         if not self._is_selection_candidate_fresh(candidate):
             message = "未检测到最近选区，请重新划词"
             self.set_status(message)
-            self._show_bubble(
-                source_text="划词翻译",
-                result_text=message,
-                pending=False,
-                action="划词翻译",
-                mode=self.config.translation_mode,
-            )
+            if not allow_cached_text:
+                self._clear_selection_candidate()
+            if show_failure_bubble:
+                self._show_bubble(
+                    source_text="划词翻译",
+                    result_text=message,
+                    pending=False,
+                    action="划词翻译",
+                    mode=self.config.translation_mode,
+                )
             return {"ok": False, "message": message}
 
         assert candidate is not None
@@ -3817,20 +3836,29 @@ class WordPackWebviewApp:
                 if self._selection_candidate is not None:
                     self._selection_candidate.payload = dict(payload)
 
-        text = candidate.text.strip() or self._capture_selected_text(candidate.payload).strip()
+        text = candidate.text.strip() if allow_cached_text else ""
+        if not text:
+            text = self._capture_selected_text(candidate.payload).strip()
         if not text:
             message = "未识别到可翻译文本，请重新划词后再试"
             self.set_status(message)
-            self._show_bubble(
-                source_text="划词翻译",
-                result_text=message,
-                pending=False,
-                action="划词翻译",
-                mode=self.config.translation_mode,
-            )
+            if not allow_cached_text:
+                self._clear_selection_candidate()
+            if show_failure_bubble:
+                self._show_bubble(
+                    source_text="划词翻译",
+                    result_text=message,
+                    pending=False,
+                    action="划词翻译",
+                    mode=self.config.translation_mode,
+                )
             return {"ok": False, "message": message}
 
         self._selection_candidate.text = text
+        if not allow_cached_text:
+            # Double-key trigger modes consume the latest selection candidate.
+            # A subsequent trigger must come from a fresh selection gesture.
+            self._clear_selection_candidate()
         self._set_selection_flow("triggered", reason="translate-start", candidate=candidate)
         return self._start_translate(text=text, action="划词翻译", show_bubble=True)
 
