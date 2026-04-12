@@ -1850,7 +1850,7 @@
                     </div>
                     <div class="field">
                       <label>图标延时(ms)</label>
-                      <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 1500)}" />
+                      <input type="number" min="0" max="5000" step="50" data-field="interaction.selection_icon_delay_ms" value="${escapeHtml(draft.interaction?.selection_icon_delay_ms ?? 100)}" />
                     </div>
                     ` : ""}
                   </div>

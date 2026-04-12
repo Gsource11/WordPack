@@ -47,7 +47,7 @@ class InteractionConfig:
     bubble_close_on_fast_mouse_leave: bool = False
     bubble_fast_close_profile: str = "off"  # off | loose | standard | aggressive
     bubble_close_on_click_outside: bool = True
-    selection_icon_delay_ms: int = 1500
+    selection_icon_delay_ms: int = 100
     selection_drag_min_px: int = 9
     selection_click_pair_max_distance_px: int = 14
     selection_hold_min_ms: int = 35
@@ -204,7 +204,7 @@ class ConfigStore:
                     legacy_enabled=bool(interaction_raw.get("bubble_close_on_fast_mouse_leave", False)),
                 ),
                 bubble_close_on_click_outside=bool(interaction_raw.get("bubble_close_on_click_outside", True)),
-                selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 1500))),
+                selection_icon_delay_ms=int(interaction_raw.get("selection_icon_delay_ms", interaction_raw.get("hover_delay_ms", 100))),
                 selection_drag_min_px=int(interaction_raw.get("selection_drag_min_px", 9) or 9),
                 selection_click_pair_max_distance_px=int(interaction_raw.get("selection_click_pair_max_distance_px", 14) or 14),
                 selection_hold_min_ms=int(interaction_raw.get("selection_hold_min_ms", 35) or 35),
@@ -242,7 +242,7 @@ class ConfigStore:
         cfg.interaction.screenshot_hotkey = str(cfg.interaction.screenshot_hotkey or "").strip()
         cfg.interaction.bubble_restore_hotkey = str(cfg.interaction.bubble_restore_hotkey or "").strip()
         cfg.interaction.main_toggle_hotkey = str(cfg.interaction.main_toggle_hotkey or "").strip()
-        cfg.interaction.selection_icon_delay_ms = max(0, min(5000, int(cfg.interaction.selection_icon_delay_ms or 1500)))
+        cfg.interaction.selection_icon_delay_ms = max(0, min(5000, int(cfg.interaction.selection_icon_delay_ms or 100)))
         cfg.interaction.selection_drag_min_px = max(3, min(40, int(cfg.interaction.selection_drag_min_px or 9)))
         cfg.interaction.selection_click_pair_max_distance_px = max(4, min(40, int(cfg.interaction.selection_click_pair_max_distance_px or 14)))
         cfg.interaction.selection_hold_min_ms = max(0, min(300, int(cfg.interaction.selection_hold_min_ms or 35)))
