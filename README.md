@@ -1,112 +1,154 @@
-# WordPack (Windows)
+﻿# WordPack
 
-WordPack 是一个 Windows 桌面翻译工具，支持：
-- AI 翻译
-- Argos 离线模型翻译（通过 `.argosmodel`）
-- 划词翻译
-- 截图 OCR 翻译
+A lightweight Windows desktop translator focused on fast daily workflows: AI translation, offline dictionary translation, selection translation, and screenshot OCR translation.
 
-## 运行环境
+[中文文档 (Chinese)](./README.zh-CN.md)
+
+## Table of Contents
+
+1. [Features](#features)
+2. [Screenshots](#screenshots)
+3. [Requirements](#requirements)
+4. [Quick Start](#quick-start)
+5. [Configuration](#configuration)
+6. [Build and Packaging](#build-and-packaging)
+7. [Project Structure](#project-structure)
+8. [Roadmap](#roadmap)
+9. [Contributing](#contributing)
+
+## Features
+
+- AI translation (configurable endpoint/model)
+- Offline dictionary translation via Argos models (`.argosmodel`)
+- Selection translation (hotkey / icon trigger)
+- Screenshot OCR translation (in-app region capture flow)
+- Tray menu controls and startup options
+- English/Chinese UI support
+
+## Screenshots
+
+Add real screenshots to make the README more useful for new users.
+
+```text
+Suggested path:
+docs/images/
+  main-window.png
+  tray-menu.png
+  screenshot-selection.png
+  settings-ai.png
+```
+
+```md
+![Main Window](docs/images/main-window.png)
+![Tray Menu](docs/images/tray-menu.png)
+![Screenshot Selection](docs/images/screenshot-selection.png)
+![AI Settings](docs/images/settings-ai.png)
+```
+
+TODO for you:
+- Capture main window (dictionary + AI mode switch visible)
+- Capture tray menu
+- Capture screenshot region selection UI
+- Capture settings page (AI config section)
+
+## Requirements
 
 - Windows 10/11
-- Python 3.12（推荐）
+- Python 3.12 (recommended)
+- WebView2 Runtime (required by pywebview)
 
-## 本地启动
+WebView2 download:
+- <https://developer.microsoft.com/microsoft-edge/webview2/>
+
+## Quick Start
+
+### Option A: Direct run
 
 ```powershell
 pip install -r requirements.txt
 python app.py
 ```
 
-## 发布打包（安装包）
+### Option B: Dev script (isolated runtime data)
 
-目标产物：
-- 程序目录版：`dist/WordPack`
-- 安装包：`dist/installer/WordPack-Setup.exe`
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_dev.ps1
+```
 
-### 1. 安装 Inno Setup 编译器（一次性）
+## Configuration
 
-本仓库不再包含 `innosetup-*.exe`。  
-请从官网下载安装 Inno Setup 6：`https://jrsoftware.org/isdl.php`
+Runtime data directory:
+- Development (source run): `<repo>/data`
+- Packaged app: `<install_dir>/data` (fallback: `%LOCALAPPDATA%\WordPack\data`)
+- Optional override: set `WORDPACK_DATA_DIR`
 
-安装后需能找到 `ISCC.exe`，脚本会按以下顺序查找：
-1. `tools/InnoSetup/ISCC.exe`
-2. `%ProgramFiles%\Inno Setup 6\ISCC.exe`
-3. `%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe`
+Main config file:
+- `config.json` under runtime data directory
 
-### 2. 从头打包（已验证流程）
+Key options:
+- `ui_language`: `zh-CN` or `en-US`
+- `translation_mode`: `dictionary` or `ai`
+- `openai.base_url`, `openai.api_key`, `openai.model`
+- `interaction.screenshot_hotkey`, `interaction.main_toggle_hotkey`
+
+## Build and Packaging
+
+Output targets:
+- App directory: `dist/WordPack`
+- Installer: `dist/installer/WordPack-Setup.exe`
+
+### Full clean build
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Clean
 ```
 
-脚本会执行：
-1. 创建/刷新 `.venv-release`
-2. 安装依赖和 `pyinstaller`
-3. 构建 `onedir` 到 `dist/WordPack`
-4. 调用 `ISCC.exe` 编译 `scripts/WordPack.iss`
-5. 生成安装包 `dist/installer/WordPack-Setup.exe`
-
-### 3. 仅重打安装包（不重编 Python）
+### Build installer only (reuse existing `dist/WordPack`)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -InstallerOnly
 ```
 
-要求 `dist/WordPack/WordPack.exe` 已存在。
+### Build offline installer
 
-## 离线模型（Argos）
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -WithOfflineInstaller
+```
 
-不再内置“几十词条兜底词典”。  
-离线翻译依赖 Argos 模型包（`.argosmodel`），由用户自行下载导入。
+Notes:
+- Inno Setup 6 is required for installer generation (`ISCC.exe`)
+- The build script checks these locations for `ISCC.exe`:
+1. `tools/InnoSetup/ISCC.exe`
+2. `%ProgramFiles%\Inno Setup 6\ISCC.exe`
+3. `%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe`
 
-## 目录说明
+## Project Structure
 
 ```text
 WordPack/
   app.py
   requirements.txt
   scripts/
+    run_dev.ps1
     build_release.ps1
     WordPack.iss
   src/
-  data/
-  dist/               # 构建输出
-  tools/InnoSetup/    # 可选：本地 Inno 编译器（不入库）
+  icon/
+  data/               # runtime data (source mode)
+  dist/               # build outputs
 ```
 
-## 关于 tools/InnoSetup
+## Roadmap
 
-`tools/InnoSetup/` 是本地编译器目录，不建议提交到 GitHub：
-- 体积大
-- 属于第三方二进制
-- 会显著增加仓库体积
+- Improve first-run onboarding (AI + dictionary model import guidance)
+- Add end-to-end smoke tests for packaging
+- Improve README screenshots and usage demos
 
-建议仅提交脚本和配置：
-- `scripts/build_release.ps1`
-- `scripts/WordPack.iss`
+## Contributing
 
-## 2026 Refactor Notes
+Issues and pull requests are welcome.
 
-### Screenshot Capture Path
-- Screenshot translation now uses an in-app `screenshot` window flow (Pot-style):
-  - Capture virtual screen once
-  - User drag-select region
-  - Crop and OCR/translate
-- System snipping (`ms-screenclip`) is no longer the default path.
-
-### OCR Engine
-- OCR is now Windows OCR only.
-- OCR config section in `config.json`:
-  - `ocr.windows_lang`: default `auto`
-  - `ocr.timeout_sec`: default `6`
-
-### Build
-- Use a single dependency set:
-  - `requirements.txt`
-- Build script no longer includes OCR-pack variant toggles:
-
-```powershell
-# Standard package
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Clean
-```
+Recommended contribution flow:
+1. Create a feature branch
+2. Keep changes focused and testable
+3. Open a PR with clear behavior changes and screenshots (for UI changes)
