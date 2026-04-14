@@ -1,154 +1,102 @@
 ﻿# WordPack
 
-A lightweight Windows desktop translator focused on fast daily workflows: AI translation, offline dictionary translation, selection translation, and screenshot OCR translation.
+> A Windows desktop translator for high-frequency use: selection translation, screenshot translation, AI translation, and offline dictionary translation.
 
-[中文文档 (Chinese)](./README.zh-CN.md)
+English | [中文文档](./README.zh-CN.md)
 
-## Table of Contents
+## Usage at a Glance
 
-1. [Features](#features)
-2. [Screenshots](#screenshots)
-3. [Requirements](#requirements)
-4. [Quick Start](#quick-start)
-5. [Configuration](#configuration)
-6. [Build and Packaging](#build-and-packaging)
-7. [Project Structure](#project-structure)
-8. [Roadmap](#roadmap)
-9. [Contributing](#contributing)
+| Selection Translation | Input Translation | Screenshot Translation |
+| --- | --- | --- |
+| Select text in any app, then trigger selection translation by your configured mode | Open main window, type/paste text, then translate | Press `Ctrl+Alt+S` (default), drag-select region, get translated output |
+| ![Selection Translation](docs/images/demo-selection-en.gif) | ![Input Translation](docs/images/demo-main-translate-en.gif) | ![Screenshot Translation](docs/images/demo-main-translate-en.gif) |
+
+## Product Demo
+
+### Main Window
+
+![Main Window](docs/images/demo-main-en.png)
+
+### History
+
+![History](docs/images/demo-history-en.png)
+
+### Settings
+
+![Settings](docs/images/demo-settings-en.png)
+
+### Tray Menu
+
+![Tray Menu](docs/images/demo-tray-en.png)
 
 ## Features
 
+- Selection translation from any app
+- Screenshot translation (capture region -> recognize text -> translate)
 - AI translation (configurable endpoint/model)
-- Offline dictionary translation via Argos models (`.argosmodel`)
-- Selection translation (hotkey / icon trigger)
-- Screenshot OCR translation (in-app region capture flow)
-- Tray menu controls and startup options
-- English/Chinese UI support
+- Offline dictionary translation via Argos model packages (`.argosmodel`)
+- Tray menu quick actions
+- Chinese/English UI
 
-## Screenshots
+## 3-Minute Quick Start
 
-Add real screenshots to make the README more useful for new users.
-
-```text
-Suggested path:
-docs/images/
-  main-window.png
-  tray-menu.png
-  screenshot-selection.png
-  settings-ai.png
-```
-
-```md
-![Main Window](docs/images/main-window.png)
-![Tray Menu](docs/images/tray-menu.png)
-![Screenshot Selection](docs/images/screenshot-selection.png)
-![AI Settings](docs/images/settings-ai.png)
-```
-
-TODO for you:
-- Capture main window (dictionary + AI mode switch visible)
-- Capture tray menu
-- Capture screenshot region selection UI
-- Capture settings page (AI config section)
-
-## Requirements
-
-- Windows 10/11
-- Python 3.12 (recommended)
-- WebView2 Runtime (required by pywebview)
-
-WebView2 download:
-- <https://developer.microsoft.com/microsoft-edge/webview2/>
-
-## Quick Start
-
-### Option A: Direct run
+### 1. Install and run
 
 ```powershell
 pip install -r requirements.txt
 python app.py
 ```
 
-### Option B: Dev script (isolated runtime data)
+### 2. Configure AI (optional)
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_dev.ps1
-```
+Open **Settings -> AI Configuration**, then set:
+- `Base URL`
+- `API Key`
+- `Model`
+
+### 3. Start using
+
+- Selection translation: select text, then trigger by configured mode
+- Screenshot translation: `Ctrl+Alt+S` (default)
+- Show/hide main window: `Ctrl+Alt+W` (default)
 
 ## Configuration
 
 Runtime data directory:
-- Development (source run): `<repo>/data`
-- Packaged app: `<install_dir>/data` (fallback: `%LOCALAPPDATA%\WordPack\data`)
-- Optional override: set `WORDPACK_DATA_DIR`
+- Source run: `<repo>/data`
+- Packaged app: `<install_dir>/data`
+- Fallback (packaged, not writable): `%LOCALAPPDATA%\WordPack\data`
+- Override: `WORDPACK_DATA_DIR`
 
-Main config file:
-- `config.json` under runtime data directory
-
-Key options:
-- `ui_language`: `zh-CN` or `en-US`
-- `translation_mode`: `dictionary` or `ai`
+Important config keys:
+- `ui_language`: `zh-CN` / `en-US`
+- `translation_mode`: `dictionary` / `ai`
 - `openai.base_url`, `openai.api_key`, `openai.model`
 - `interaction.screenshot_hotkey`, `interaction.main_toggle_hotkey`
 
 ## Build and Packaging
 
-Output targets:
-- App directory: `dist/WordPack`
+Outputs:
+- App folder: `dist/WordPack`
 - Installer: `dist/installer/WordPack-Setup.exe`
 
-### Full clean build
-
 ```powershell
+# Full clean build
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Clean
-```
 
-### Build installer only (reuse existing `dist/WordPack`)
-
-```powershell
+# Installer only (reuse dist/WordPack)
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -InstallerOnly
-```
 
-### Build offline installer
-
-```powershell
+# Offline installer
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -WithOfflineInstaller
 ```
 
 Notes:
-- Inno Setup 6 is required for installer generation (`ISCC.exe`)
-- The build script checks these locations for `ISCC.exe`:
-1. `tools/InnoSetup/ISCC.exe`
-2. `%ProgramFiles%\Inno Setup 6\ISCC.exe`
-3. `%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe`
+- Inno Setup 6 (`ISCC.exe`) is required for installer generation
+- WebView2 runtime is required to run the app
 
-## Project Structure
+## Development
 
-```text
-WordPack/
-  app.py
-  requirements.txt
-  scripts/
-    run_dev.ps1
-    build_release.ps1
-    WordPack.iss
-  src/
-  icon/
-  data/               # runtime data (source mode)
-  dist/               # build outputs
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_dev.ps1
 ```
-
-## Roadmap
-
-- Improve first-run onboarding (AI + dictionary model import guidance)
-- Add end-to-end smoke tests for packaging
-- Improve README screenshots and usage demos
-
-## Contributing
-
-Issues and pull requests are welcome.
-
-Recommended contribution flow:
-1. Create a feature branch
-2. Keep changes focused and testable
-3. Open a PR with clear behavior changes and screenshots (for UI changes)
