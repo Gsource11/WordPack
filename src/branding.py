@@ -5,7 +5,7 @@ from pathlib import Path
 
 APP_NAME_ZH = "词小包"
 APP_NAME_EN = "WordPack"
-APP_TITLE = f"{APP_NAME_ZH} {APP_NAME_EN}"
+APP_TITLE = APP_NAME_ZH
 
 _ICON_ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 

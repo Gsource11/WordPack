@@ -18,7 +18,7 @@ from typing import Any, Callable
 import webview
 
 from src.app_logging import APP_RUNTIME_DIR, APP_USER_RUNTIME_DIR, LEGACY_USER_DIR, get_logger
-from src.branding import APP_TITLE, app_title_for_ui_language, ensure_icon_ico, icon_data_url, icon_path
+from src.branding import app_title_for_ui_language, ensure_icon_ico, icon_data_url, icon_path
 from src.config import AppConfig, ConfigStore, SelectionAppProfile
 from src.hotkeys import HotkeyManager, normalize_shortcut, parse_shortcut
 from src.mouse_hooks import MouseHookManager
@@ -436,7 +436,7 @@ class WordPackWebviewApp:
         self.logger.error(message.replace("\n", " "))
         try:
             MB_ICONERROR = 0x00000010
-            ctypes.windll.user32.MessageBoxW(None, message, APP_TITLE, MB_ICONERROR)
+            ctypes.windll.user32.MessageBoxW(None, message, self._app_title(), MB_ICONERROR)
         except Exception:
             pass
 
@@ -472,9 +472,10 @@ class WordPackWebviewApp:
         bounds = get_virtual_screen_bounds()
         main_y = max(bounds.top + 8, int(main_y) - self.MAIN_STARTUP_Y_SHIFT)
 
+        app_title = self._app_title()
         self.main_window = self._create_window(
             kind="main",
-            title=APP_TITLE,
+            title=app_title,
             width=self.MAIN_WIDTH,
             height=initial_main_height,
             min_size=(420, self.MAIN_MIN_HEIGHT),
@@ -1813,7 +1814,7 @@ class WordPackWebviewApp:
         try:
             self.tray_window = self._create_window(
                 kind="tray",
-                title=f"{APP_TITLE} Tray",
+                title=f"{self._app_title()} Tray",
                 width=width,
                 height=height,
                 min_size=(width, height),
