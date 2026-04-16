@@ -394,7 +394,7 @@ ShutdownBlockReasonUninstallingApp=Uninstalling %1.
 
 [CustomMessages]
 
-NameAndVersion=%1 version %2
+NameAndVersion=%1
 AdditionalIcons=Additional shortcuts:
 CreateDesktopIcon=Create a &desktop shortcut
 CreateQuickLaunchIcon=Create a &Quick Launch shortcut
@@ -406,3 +406,4 @@ AssocingFileExtension=Associating %1 with the %2 file extension...
 AutoStartProgramGroupDescription=Startup:
 AutoStartProgram=Automatically start %1
 AddonHostProgramNotFound=%1 could not be located in the folder you selected.%n%nDo you want to continue anyway?
+

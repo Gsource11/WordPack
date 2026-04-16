@@ -404,7 +404,7 @@ ShutdownBlockReasonUninstallingApp=正在卸载 %1。
 
 [CustomMessages]
 
-NameAndVersion=%1 版本 %2
+NameAndVersion=%1
 AdditionalIcons=附加快捷方式：
 CreateDesktopIcon=创建桌面快捷方式(&D)
 CreateQuickLaunchIcon=创建快速启动栏快捷方式(&Q)
@@ -416,3 +416,4 @@ AssocingFileExtension=正在将 %2 文件扩展名与 %1 建立关联...
 AutoStartProgramGroupDescription=启动：
 AutoStartProgram=自动启动 %1
 AddonHostProgramNotFound=您选择的文件夹中无法找到 %1。%n%n您要继续吗？
+

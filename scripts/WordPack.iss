@@ -1,6 +1,6 @@
 ﻿#define MyAppName "WordPack"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "WordPack"
+#define MyAppPublisher "quanran"
 #define MyAppExeName "WordPack.exe"
 
 #ifndef OFFLINE
@@ -21,11 +21,13 @@
 
 [Setup]
 AppId={{A8A3F9BE-DF74-40B2-9A96-3D9BDB7F9C61}
-AppName={#MyAppName}
+AppName={cm:AppDisplayName}
 AppVersion={#MyAppVersion}
+AppVerName={cm:AppDisplayName}
+UninstallDisplayName={cm:AppDisplayName}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
-DefaultGroupName={#MyAppName}
+DefaultGroupName={cm:AppDisplayName}
 AllowNoIcons=yes
 OutputDir=..\dist\installer
 OutputBaseFilename={#InstallerName}
@@ -48,6 +50,7 @@ Name: "english"; MessagesFile: "EnglishCustom.isl"
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [CustomMessages]
+english.AppDisplayName=WordPack
 english.WebView2PageTitle=Install WebView2 Runtime
 english.WebView2PageSubtitle=WordPack requires WebView2 Runtime to run.
 english.WebView2NeedText=WebView2 Runtime is not detected on this system.%nChoose how to continue before installation:
@@ -61,6 +64,7 @@ english.WebView2MissingAfterInstallMsg=WebView2 Runtime is still missing. WordPa
 english.CreateDesktopIcon=Create a &desktop shortcut
 english.LaunchProgram=Launch %1
 english.RemovePersonalDataPrompt=Also remove personal data (settings/history/cache)?
+chinesesimplified.AppDisplayName=词小包
 chinesesimplified.WebView2PageTitle=安装 WebView2 运行时
 chinesesimplified.WebView2PageSubtitle=WordPack 运行依赖 WebView2 Runtime。
 chinesesimplified.WebView2NeedText=系统中未检测到 WebView2 Runtime。%n请选择安装前的处理方式：
@@ -89,11 +93,11 @@ Source: "..\argosmodel\*"; DestDir: "{app}\argosmodel"; Flags: recursesubdirs ig
 Name: "{app}\data"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{cm:AppDisplayName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{cm:AppDisplayName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
