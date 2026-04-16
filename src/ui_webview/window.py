@@ -71,6 +71,7 @@ class WordPackWebviewApp:
     WEBVIEW2_DOWNLOAD_PAGE = "https://developer.microsoft.com/microsoft-edge/webview2/"
     STARTUP_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
     STARTUP_RUN_VALUE_NAME = "WordPack"
+    STARTUP_BACKGROUND_ARG = "--startup-background"
 
     def _app_title(self, ui_language: str | None = None) -> str:
         language = (
@@ -244,6 +245,8 @@ class WordPackWebviewApp:
         self._pending_tray_anchor: dict[str, int] | None = None
         self._tray_show_timer: threading.Timer | None = None
         self._tray_show_ticket = 0
+        self._startup_background_launch = self._is_startup_background_launch()
+        self._main_window_seeded_offscreen = False
 
     def _resolve_data_dir(self, legacy_candidates: list[Path]) -> Path:
         def ensure_writable_dir(path: Path) -> bool:
@@ -331,16 +334,23 @@ class WordPackWebviewApp:
             return f"\"{value.replace('\"', '\"\"')}\""
 
         if getattr(sys, "frozen", False):
-            return quote(Path(sys.executable).resolve())
+            return f"{quote(Path(sys.executable).resolve())} {self.STARTUP_BACKGROUND_ARG}"
 
         py_exe = quote(Path(sys.executable).resolve())
         argv0 = Path(sys.argv[0]).resolve() if sys.argv else (self.base_dir / "app.py")
         if argv0.exists() and argv0.suffix.lower() in {".py", ".pyw"}:
-            return f"{py_exe} {quote(argv0)}"
+            return f"{py_exe} {quote(argv0)} {self.STARTUP_BACKGROUND_ARG}"
         fallback = self.base_dir / "app.py"
         if fallback.exists():
-            return f"{py_exe} {quote(fallback.resolve())}"
-        return py_exe
+            return f"{py_exe} {quote(fallback.resolve())} {self.STARTUP_BACKGROUND_ARG}"
+        return f"{py_exe} {self.STARTUP_BACKGROUND_ARG}"
+
+    def _is_startup_background_launch(self) -> bool:
+        for arg in sys.argv[1:]:
+            text = str(arg or "").strip().lower()
+            if text in {self.STARTUP_BACKGROUND_ARG, "/startup-background"}:
+                return True
+        return False
 
     def _is_startup_enabled_in_system(self) -> bool:
         try:
@@ -471,6 +481,11 @@ class WordPackWebviewApp:
         main_x, main_y = self._centered_position(self.MAIN_WIDTH, initial_main_height)
         bounds = get_virtual_screen_bounds()
         main_y = max(bounds.top + 8, int(main_y) - self.MAIN_STARTUP_Y_SHIFT)
+        startup_background = bool(self._startup_background_launch)
+        if startup_background:
+            main_x = int(bounds.left) - int(self.MAIN_WIDTH) - 240
+            main_y = int(bounds.top) - int(initial_main_height) - 240
+            self._main_window_seeded_offscreen = True
 
         app_title = self._app_title()
         self.main_window = self._create_window(
@@ -485,7 +500,7 @@ class WordPackWebviewApp:
             shadow=True,
             resizable=True,
             on_top=False,
-            focus=True,
+            focus=not startup_background,
             transparent=False,
             hidden=True,
         )
@@ -1117,6 +1132,12 @@ class WordPackWebviewApp:
     def _on_webview_started(self) -> None:
         self._webview_started = True
         self.logger.info("Starting background input services")
+        if self._startup_background_launch:
+            try:
+                # Startup-background mode should keep only tray presence, no taskbar entry.
+                self._set_main_window_taskbar_visibility(False, wait=True)
+            except Exception:
+                self.logger.exception("Failed to hide taskbar entry for startup-background launch")
         try:
             if self.main_window is not None:
                 current = self._current_main_geometry()
@@ -1507,6 +1528,16 @@ class WordPackWebviewApp:
             if self._main_startup_revealed:
                 return
             self._main_startup_revealed = True
+            startup_background = bool(self._startup_background_launch)
+
+        if startup_background:
+            try:
+                # Enforce taskbar-hidden mode again after main webview reports ready.
+                self._set_main_window_taskbar_visibility(False, wait=True)
+            except Exception:
+                self.logger.exception("Failed to enforce taskbar-hidden mode on main ready")
+            self.logger.info("Startup background launch detected; keep main window hidden to tray")
+            return
 
         def reveal_main() -> None:
             if self.main_window is None:
@@ -1917,11 +1948,33 @@ class WordPackWebviewApp:
         if self.main_window is None:
             return
         try:
-            self.main_window.show()
+            self._set_main_window_taskbar_visibility(True, wait=True)
+            self._show_main_window_after_prepare()
             self.hidden = False
             self.bridge.send("main", "tray-show-main", {})
         except Exception:
             self.logger.exception("Failed to show main window from tray")
+
+    def _show_main_window_after_prepare(self) -> None:
+        if self.main_window is None:
+            return
+        self._prepare_main_window_first_show_position()
+        self.main_window.show()
+
+    def _prepare_main_window_first_show_position(self) -> None:
+        if self.main_window is None:
+            return
+        with self.lock:
+            if not self._main_window_seeded_offscreen:
+                return
+            self._main_window_seeded_offscreen = False
+        try:
+            width = int(getattr(self.main_window, "width", self.MAIN_WIDTH) or self.MAIN_WIDTH)
+            height = int(getattr(self.main_window, "height", self.MAIN_COMPACT_HEIGHT) or self.MAIN_COMPACT_HEIGHT)
+            x, y = self._centered_position(width, height)
+            self.main_window.move(int(x), int(y))
+        except Exception:
+            self.logger.exception("Failed to restore main window position from offscreen seed")
 
     def _open_panel_from_tray(self, panel: str) -> None:
         panel_name = "history" if str(panel or "").strip().lower() == "history" else "settings"
@@ -3263,7 +3316,7 @@ class WordPackWebviewApp:
         try:
             self._run_on_window_ui(
                 self.main_window,
-                lambda: self.main_window.show(),
+                self._show_main_window_after_prepare,
                 wait=True,
                 timeout_sec=1.5,
                 log_prefix="restore_main_after_screenshot",
@@ -4321,7 +4374,7 @@ class WordPackWebviewApp:
             self._set_main_window_taskbar_visibility(True, wait=True)
             self._run_on_window_ui(
                 self.main_window,
-                lambda: self.main_window.show(),
+                self._show_main_window_after_prepare,
                 wait=True,
                 timeout_sec=1.2,
                 log_prefix="toggle_main_window_visibility.show",

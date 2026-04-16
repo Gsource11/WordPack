@@ -312,6 +312,8 @@ begin
   end;
 end;
 
+procedure EnsureDefaultUiLanguageConfig(); forward;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -339,6 +341,8 @@ begin
 
   if CurStep = ssPostInstall then
   begin
+    EnsureDefaultUiLanguageConfig();
+
     if not HasWebView2Runtime() then
     begin
       MsgBox(
@@ -369,6 +373,56 @@ begin
     Result := ''
   else
     Result := AddBackslash(UserProfile) + '.wordpack\data';
+end;
+
+function GetInstallerSelectedUiLanguage(): String;
+var
+  LangName: String;
+begin
+  LangName := Lowercase(Trim(ActiveLanguage()));
+  if LangName = 'english' then
+    Result := 'en-US'
+  else
+    Result := 'zh-CN';
+end;
+
+function HasAnyExistingUserConfig(): Boolean;
+var
+  InstallConfigPath: String;
+  CurrentUserConfigPath: String;
+  LegacyConfigPath: String;
+begin
+  InstallConfigPath := AddBackslash(GetInstallDataDir()) + 'config.json';
+  CurrentUserConfigPath := AddBackslash(GetCurrentUserDataDir()) + 'config.json';
+  LegacyConfigPath := AddBackslash(GetLegacyUserDataDir()) + 'config.json';
+  Result :=
+    FileExists(InstallConfigPath) or
+    FileExists(CurrentUserConfigPath) or
+    FileExists(LegacyConfigPath);
+end;
+
+procedure EnsureDefaultUiLanguageConfig();
+var
+  UiLang: String;
+  ConfigText: String;
+  CurrentUserDataDir: String;
+  CurrentUserConfigPath: String;
+begin
+  if HasAnyExistingUserConfig() then
+    exit;
+
+  UiLang := GetInstallerSelectedUiLanguage();
+  ConfigText :=
+    '{'#13#10 +
+    '  "ui_language": "' + UiLang + '"'#13#10 +
+    '}'#13#10;
+
+  CurrentUserDataDir := GetCurrentUserDataDir();
+  CurrentUserConfigPath := AddBackslash(CurrentUserDataDir) + 'config.json';
+  if (CurrentUserDataDir <> '') and (not DirExists(CurrentUserDataDir)) then
+    ForceDirectories(CurrentUserDataDir);
+  if (CurrentUserDataDir <> '') and (not FileExists(CurrentUserConfigPath)) then
+    SaveStringToFile(CurrentUserConfigPath, ConfigText, False);
 end;
 
 procedure DeleteDirIfExists(const DirPath: String);
