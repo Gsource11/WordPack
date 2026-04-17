@@ -1960,6 +1960,7 @@ class WordPackWebviewApp:
             return
         self._prepare_main_window_first_show_position()
         self.main_window.show()
+        self._raise_window_topmost_once(self.main_window)
 
     def _prepare_main_window_first_show_position(self) -> None:
         if self.main_window is None:
@@ -4546,6 +4547,29 @@ class WordPackWebviewApp:
         if handle is None:
             return None
         return self._native_handle_to_int(handle)
+
+    def _raise_window_topmost_once(self, window) -> None:
+        hwnd = self._window_hwnd(window)
+        if not hwnd:
+            return
+        user32 = ctypes.windll.user32
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SW_RESTORE = 9
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        try:
+            user32.ShowWindow(int(hwnd), SW_RESTORE)
+            # Raise above all windows first, then drop back to regular z-order.
+            # This avoids forcing permanent always-on-top behavior.
+            user32.SetWindowPos(int(hwnd), int(HWND_TOPMOST), 0, 0, 0, 0, int(flags))
+            user32.SetWindowPos(int(hwnd), int(HWND_NOTOPMOST), 0, 0, 0, 0, int(flags))
+            user32.BringWindowToTop(int(hwnd))
+            user32.SetForegroundWindow(int(hwnd))
+        except Exception:
+            self.logger.exception("Failed to raise window to front hwnd=%s", hwnd)
 
     def _is_window_visible(self, window) -> bool:
         hwnd = self._window_hwnd(window)
