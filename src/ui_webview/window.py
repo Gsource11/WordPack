@@ -27,6 +27,7 @@ from src.ocr import ScreenshotOCRService
 from src.selection_capture import ClipboardCaptureResult, SelectionCaptureResult, SelectionCaptureService
 from src.screenshot import MIN_CAPTURE_SIZE, ScreenRegion, capture_screen_region
 from src.storage import HistoryStore
+from src.tts_service import SapTtsService
 from src.translator import TranslationService
 from src.native_icon_overlay import NativeIconOverlay
 from src.tray_icon import TrayIconManager
@@ -109,6 +110,7 @@ class WordPackWebviewApp:
         self.ocr_service = ScreenshotOCRService(self.get_config)
         self.selection_capture = SelectionCaptureService()
         self.bridge = FrontendBridge(self.logger)
+        self.tts_service = SapTtsService(self.logger, on_state=self._on_tts_state_changed)
         self._app_icon_url = icon_data_url()
         self._app_icon_ico = ensure_icon_ico()
         self.frontend_dir = self._resolve_frontend_dir()
@@ -1446,6 +1448,10 @@ class WordPackWebviewApp:
             self.tray_icon.stop()
         except Exception:
             self.logger.exception("Failed to stop tray icon")
+        try:
+            self.tts_service.stop()
+        except Exception:
+            self.logger.exception("Failed to stop TTS service")
         self._input_poll_stop.set()
         self.mouse_hooks.stop()
         self.hotkeys.stop()
@@ -1477,6 +1483,7 @@ class WordPackWebviewApp:
                 "themeMode": self._resolved_theme_mode(),
                 "shortcuts": self._shortcut_descriptions(),
                 "aiAvailability": self._ai_availability_payload(),
+                "ttsState": self._tts_state_payload(),
             }
         if kind == "bubble":
             return {
@@ -1485,6 +1492,7 @@ class WordPackWebviewApp:
                 "themeMode": self._resolved_theme_mode(),
                 "bubble": self._bubble_state.to_payload(),
                 "aiAvailability": self._ai_availability_payload(),
+                "ttsState": self._tts_state_payload(),
             }
         if kind == "icon":
             return {
@@ -2103,7 +2111,26 @@ class WordPackWebviewApp:
             "settings": self.get_settings_payload(),
             "themeMode": self._resolved_theme_mode(),
             "aiAvailability": self._ai_availability_payload(),
+            "ttsState": self._tts_state_payload(),
         }
+
+    def _tts_state_payload(self) -> dict[str, Any]:
+        try:
+            return self.tts_service.get_state()
+        except Exception:
+            self.logger.exception("Failed to read TTS state")
+            return {
+                "available": False,
+                "status": "stopped",
+                "source_key": "",
+                "text": "",
+                "voice_name": "",
+                "message": "TTS 不可用",
+            }
+
+    def _on_tts_state_changed(self, payload: dict[str, Any]) -> None:
+        self.bridge.send("main", "tts-state", {"ttsState": dict(payload or {})})
+        self.bridge.send("bubble", "tts-state", {"ttsState": dict(payload or {})})
 
     @staticmethod
     def _contains_cjk(text: str) -> bool:
@@ -2725,6 +2752,12 @@ class WordPackWebviewApp:
         message = "已复制到剪贴板" if ok else "复制失败，请重试"
         self.set_status(message)
         return {"ok": ok, "message": message}
+
+    def tts_toggle(self, text: str, source_key: str = "") -> dict[str, Any]:
+        return self.tts_service.toggle(str(text or ""), str(source_key or ""))
+
+    def tts_stop(self) -> dict[str, Any]:
+        return self.tts_service.stop_playback()
 
     def clear_history(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         scope = "all"

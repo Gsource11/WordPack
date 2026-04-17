@@ -41,6 +41,12 @@ class WindowApi:
     def copy_text(self, text: str) -> dict[str, Any]:
         return self._controller.copy_text(text)
 
+    def tts_toggle(self, text: str, source_key: str = "") -> dict[str, Any]:
+        return self._controller.tts_toggle(text, source_key)
+
+    def tts_stop(self) -> dict[str, Any]:
+        return self._controller.tts_stop()
+
     def generate_multi_candidates(self, text: str = "", result_text: str = "") -> dict[str, Any]:
         return self._controller.generate_multi_candidates_from_window(self.kind, text, result_text)
 

@@ -35,6 +35,10 @@ English | [中文文档](./README.zh-CN.md)
 - Screenshot translation (capture region -> recognize text -> translate)
 - AI translation (configurable endpoint/model)
 - Offline dictionary translation via Argos model packages (`.argosmodel`)
+- Offline text-to-speech playback (Windows SAPI) for translated text
+  - Main window: play/stop toggle in result area
+  - Bubble panel: play/stop toggle in result area
+  - Zoom panel and History: play translated text with one click
 - Tray menu quick actions
 - Chinese/English UI
 
@@ -59,6 +63,7 @@ Open **Settings -> AI Configuration**, then set:
 - Selection translation: select text, then trigger by configured mode
 - Screenshot translation: `Ctrl+Alt+S` (default)
 - Show/hide main window: `Ctrl+Alt+W` (default)
+- Voice playback: click the play icon in translated result areas to read text aloud
 
 ## Configuration
 

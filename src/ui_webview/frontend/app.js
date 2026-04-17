@@ -67,6 +67,14 @@
       rowHeight: 124,
       overscan: 4,
     },
+    tts: {
+      available: false,
+      status: "stopped",
+      source_key: "",
+      text: "",
+      voice_name: "",
+      message: "",
+    },
   };
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -134,6 +142,8 @@
       "删除": "Delete",
       "加载更多（50条）": "Load More (50)",
       "关闭": "Close",
+      "没有可朗读的内容": "No text to speak",
+      "TTS 不可用": "TTS unavailable",
     };
     if (Object.prototype.hasOwnProperty.call(exact, raw)) return exact[raw];
     const directionMatch = raw.match(/^方向:\s*(.+)$/);
@@ -179,6 +189,9 @@
     screenshot: icon("<path d='M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4'/><rect x='8' y='8' width='8' height='8' rx='1.5'/>"),
     check: icon("<path d='M20 6 9 17l-5-5'/>"),
     error: icon("<circle cx='12' cy='12' r='9'/><path d='M9 9l6 6M15 9l-6 6'/>"),
+    speaker: icon("<path d='M11 6 7.7 8.7H5v6.6h2.7L11 18z'/><path d='M14.5 9.5a4 4 0 0 1 0 5'/><path d='M16.8 7.2a7 7 0 0 1 0 9.6'/>"),
+    play: "<span class='icon'><svg viewBox='0 0 24 24' fill='none' stroke='none'><path d='M8 5.8c0-.95 1.04-1.53 1.84-1.03l9.05 5.87a1.2 1.2 0 0 1 0 2.02l-9.05 5.87A1.2 1.2 0 0 1 8 17.58z' fill='currentColor'/></svg></span>",
+    stop: "<span class='icon'><svg viewBox='0 0 24 24' fill='none' stroke='none'><rect x='6.7' y='6.7' width='10.6' height='10.6' rx='2.1' fill='currentColor'/></svg></span>",
   };
 
   const brandIcon = (className, url, fallback = "") => {
@@ -451,6 +464,49 @@
 
   function getBubbleDisplayedCandidates() {
     return dedupeCandidateItems(state.bubble?.candidate_items || []).slice(0, 4);
+  }
+
+  function normalizeTtsState(raw) {
+    const next = raw || {};
+    return {
+      available: Boolean(next.available),
+      status: ["playing", "stopped"].includes(String(next.status || "")) ? String(next.status) : "stopped",
+      source_key: String(next.source_key || ""),
+      text: String(next.text || ""),
+      voice_name: String(next.voice_name || ""),
+      message: String(next.message || ""),
+    };
+  }
+
+  function mainTtsSourceKey() {
+    return "main:result";
+  }
+
+  function bubbleTtsSourceKey() {
+    return "bubble:result";
+  }
+
+  function zoomTtsSourceKey() {
+    return "zoom:result";
+  }
+
+  function historyTtsSourceKey(id) {
+    return `history:${Number(id || 0)}`;
+  }
+
+  function isTtsActiveSource(sourceKey) {
+    const key = String(sourceKey || "");
+    if (!key) return false;
+    if (!state.tts) return false;
+    if ((state.tts.status || "stopped") === "stopped") return false;
+    return String(state.tts.source_key || "") === key;
+  }
+
+  async function toggleTts(text, sourceKey) {
+    const resp = await apiCall("tts_toggle", String(text || ""), String(sourceKey || ""));
+    if (resp && resp.ok === false && resp.message) {
+      showToast("warning", resp.message);
+    }
   }
 
   function historyQueryPayload(reset = false) {
@@ -1052,6 +1108,9 @@
       state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
       state.aiAvailabilityCheckedAt = Number(payload.aiAvailability.checkedAt || 0);
     }
+    if (payload.ttsState) {
+      syncTtsStateFromPayload(payload.ttsState);
+    }
     if (payload.shortcuts) state.shortcuts = payload.shortcuts;
     if (payload.bubble) state.bubble = payload.bubble;
     if (payload.trayMenu) state.trayMenu = payload.trayMenu;
@@ -1639,6 +1698,16 @@
       </div>`).join("");
     const directionValue = String(draft.dictionary?.preferred_direction || state.config?.dictionary?.preferred_direction || "auto");
     const directionLabel = directionValue === "auto" ? t("方向: 自动", "Direction: auto") : t(`方向: ${directionValue}`, `Direction: ${directionValue}`);
+    const ttsMainActive = isTtsActiveSource(mainTtsSourceKey());
+    const ttsMainText = String(state.resultText || getMainResultTextFromDom() || "").trim();
+    const ttsMainReady = Boolean(ttsMainText);
+    const ttsMainIcon = ttsMainActive ? icons.stop : icons.play;
+    const ttsMainLabel = ttsMainActive ? t("停止", "Stop") : t("播放", "Play");
+    const zoomResultText = String(state.zoomPayload?.resultText || state.resultText || "").trim();
+    const zoomTtsActive = isTtsActiveSource(zoomTtsSourceKey());
+    const zoomTtsReady = Boolean(zoomResultText);
+    const zoomTtsIcon = zoomTtsActive ? icons.stop : icons.play;
+    const zoomTtsLabel = zoomTtsActive ? t("停止", "Stop") : t("播放", "Play");
 
     root.innerHTML = `
       <div class="window-shell">
@@ -1659,7 +1728,7 @@
               <button class="dir-button" data-action="cycle-direction">${escapeHtml(directionLabel)}</button>
             </div>
             <div class="input-shell">
-              <textarea id="sourceText" class="source-textarea" spellcheck="false" placeholder="${escapeHtml(t("输入或粘贴待翻译文本", "Type or paste text to translate"))}"></textarea>
+              <textarea id="sourceText" class="source-textarea" data-preserve-scroll="source" spellcheck="false" placeholder="${escapeHtml(t("输入或粘贴待翻译文本", "Type or paste text to translate"))}"></textarea>
             </div>
           </section>
           <button class="primary-button" data-action="translate" ${translateEnabled ? "" : `disabled data-tooltip="${escapeHtml(t("无可用翻译模式，请检查配置", "No available translation mode. Check your configuration."))}"`}>${mode === "ai" ? icons.robot : icons.book}<span>${escapeHtml(t("翻译", "Translate"))}</span></button>
@@ -1672,8 +1741,9 @@
               </div>
             </div>
             <div class="result-workbench ${showCandidatePane ? "with-candidates" : ""}">
-              <div class="result-pane ${mainResultClass}" id="resultPane" data-preserve-scroll="result">
-                <div class="result-scroll" id="resultScroll" data-autoscroll="main-result">${mainResultContent}</div>
+              <div class="result-pane ${mainResultClass}" id="resultPane">
+                <div class="result-scroll" id="resultScroll" data-preserve-scroll="result" data-autoscroll="main-result">${mainResultContent}</div>
+                ${ttsMainReady ? `<button class="result-tts-btn ${ttsMainActive ? "active" : ""}" data-action="tts-main-toggle" aria-label="${escapeHtml(ttsMainLabel)}">${ttsMainIcon}</button>` : ""}
               </div>
               <aside class="candidate-pane ${showCandidatePane ? "open" : ""}" id="mainCandidatePane">
                 <div class="candidate-list">
@@ -1720,6 +1790,7 @@
                   <div class="history-text history-result">${escapeHtml((item.result_text || "").slice(0, 180))}</div>
                   <div class="history-actions">
                     <button class="mini-button ${item.favorite ? "active" : ""}" data-action="history-favorite" data-history-id="${item.id}" data-favorite="${item.favorite ? "0" : "1"}" data-tooltip="${escapeHtml(item.favorite ? t("取消收藏", "Unfavorite") : t("收藏", "Favorite"))}">${item.favorite ? icons.favoriteActive : icons.favorite}</button>
+                    <button class="mini-button ${isTtsActiveSource(historyTtsSourceKey(item.id)) ? "active" : ""}" data-action="history-tts-result" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("朗读译文", "Speak translation"))}">${isTtsActiveSource(historyTtsSourceKey(item.id)) ? icons.stop : icons.play}</button>
                     <button class="mini-button" data-action="history-copy-source" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("复制原文", "Copy source"))}">${historyCopySourceFlashId === Number(item.id) ? icons.check : icons.copy}</button>
                     <button class="mini-button" data-action="history-copy-result" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("复制译文", "Copy translation"))}">${historyCopyResultFlashId === Number(item.id) ? icons.check : icons.clipboard}</button>
                     <button class="mini-button" data-action="history-delete" data-history-id="${item.id}" data-tooltip="${escapeHtml(t("删除", "Delete"))}">${icons.trash}</button>
@@ -1950,9 +2021,10 @@
                 <div class="card-title">${escapeHtml(t("原文", "Source"))}</div>
                 <div class="zoom-text" id="zoomSource">${escapeHtml(state.zoomPayload?.sourceText || state.sourceText)}</div>
               </section>
-              <section class="zoom-section">
+              <section class="zoom-section zoom-section-result" id="zoomResultSection">
                 <div class="card-title">${escapeHtml(t("译文", "Translation"))}</div>
-                <div class="zoom-text" id="zoomResult">${escapeHtml(state.zoomPayload?.resultText || state.resultText)}</div>
+                <div class="zoom-text" id="zoomResultText">${escapeHtml(state.zoomPayload?.resultText || state.resultText)}</div>
+                ${zoomTtsReady ? `<button class="zoom-result-tts-btn ${zoomTtsActive ? "active" : ""}" data-action="tts-zoom-toggle" aria-label="${escapeHtml(zoomTtsLabel)}">${zoomTtsIcon}</button>` : ""}
               </section>
             </div>
           </div>
@@ -2002,6 +2074,12 @@
     const bubbleCandidateDisabled = !bubbleCandidateState.enabled || bubble.candidate_pending;
     const showBubbleCandidatePane = Boolean(state.bubbleCandidatePaneOpen || bubble.candidate_pending || bubbleCandidateItems.length);
     const bubbleDisplayedCandidates = (String(bubble.result_text || "").trim() ? [String(bubble.result_text || "").trim(), ...dedupeCandidateItems(bubbleCandidateItems)] : dedupeCandidateItems(bubbleCandidateItems)).slice(0, 4);
+    const bubbleSourceKey = bubbleTtsSourceKey();
+    const bubbleTtsActive = isTtsActiveSource(bubbleSourceKey);
+    const bubbleTtsText = String(bubble.result_text || "").trim();
+    const bubbleTtsEnabled = Boolean(bubbleTtsText);
+    const bubbleTtsIcon = bubbleTtsActive ? icons.stop : icons.play;
+    const bubbleTtsLabel = bubbleTtsActive ? t("停止", "Stop") : t("播放", "Play");
     const bubbleCandidateRows = bubbleDisplayedCandidates.map((item, index) => `
       <div class="bubble-candidate-item">
         <div class="bubble-candidate-text" title="${escapeHtml(item)}">${escapeHtml(item)}</div>
@@ -2028,6 +2106,7 @@
                 <div class="bubble-label bubble-result-label"></div>
                 <div class="bubble-result ${bubbleResultClass}">
                   <div class="bubble-result-scroll" data-autoscroll="bubble-result">${bubbleResultContent}</div>
+                  ${bubbleTtsEnabled ? `<button class="bubble-result-tts-btn ${bubbleTtsActive ? "active" : ""}" data-action="tts-bubble-toggle" aria-label="${escapeHtml(bubbleTtsLabel)}">${bubbleTtsIcon}</button>` : ""}
                 </div>
               </div>
               <aside class="bubble-candidate-pane ${showBubbleCandidatePane ? "open" : ""}">
@@ -2046,6 +2125,46 @@
       </div>`;
   }
 
+  function syncTtsStateFromPayload(rawPayload) {
+    const next = normalizeTtsState(rawPayload || {});
+    const prev = normalizeTtsState(state.tts || {});
+    const changed =
+      next.status !== prev.status
+      || next.source_key !== prev.source_key
+      || next.available !== prev.available
+      || next.message !== prev.message;
+    if (!changed) return;
+    state.tts = next;
+    patchZoomTtsButton();
+    if (state.view === "main" && patchMainDynamic()) return;
+    if (state.view === "bubble" && patchBubbleDynamic()) return;
+    rerender();
+  }
+
+  function patchZoomTtsButton() {
+    const zoomResultSection = document.getElementById("zoomResultSection");
+    if (!(zoomResultSection instanceof HTMLElement)) return;
+    const text = String(state.zoomPayload?.resultText || state.resultText || "").trim();
+    const active = isTtsActiveSource(zoomTtsSourceKey());
+    const existing = zoomResultSection.querySelector(".zoom-result-tts-btn");
+    let btn = existing;
+    if (text && !(existing instanceof HTMLButtonElement)) {
+      const created = document.createElement("button");
+      created.className = "zoom-result-tts-btn";
+      created.dataset.action = "tts-zoom-toggle";
+      zoomResultSection.appendChild(created);
+      btn = created;
+    } else if (!text && existing instanceof HTMLButtonElement) {
+      existing.remove();
+      btn = null;
+    }
+    if (btn instanceof HTMLButtonElement) {
+      btn.classList.toggle("active", active);
+      btn.innerHTML = active ? icons.stop : icons.play;
+      btn.setAttribute("aria-label", active ? t("停止", "Stop") : t("播放", "Play"));
+    }
+  }
+
   function patchMainDynamic() {
     if (state.view !== "main") return false;
     const textarea = document.getElementById("sourceText");
@@ -2053,6 +2172,7 @@
     const resultScroll = document.getElementById("resultScroll");
     const statusText = document.getElementById("statusText");
     if (!textarea || !resultPane || !resultScroll) return false;
+    const mainScrollTopBefore = resultScroll.scrollTop;
 
     if (document.activeElement !== textarea && textarea.value !== state.sourceText) {
       textarea.value = state.sourceText;
@@ -2060,15 +2180,32 @@
 
     updateResultCardVisibility();
     syncMainCompact();
-    resultScroll.innerHTML = state.pending && !state.resultText
-      ? skeletonMarkup("main")
-      : escapeHtml(state.resultText || "");
+    const showMainSkeleton = Boolean(state.pending && !state.resultText);
+    let mainContentChanged = false;
+    if (showMainSkeleton) {
+      if (resultScroll.dataset.renderMode !== "skeleton") {
+        resultScroll.innerHTML = skeletonMarkup("main");
+        resultScroll.dataset.renderMode = "skeleton";
+        mainContentChanged = true;
+      }
+    } else {
+      const nextMainText = String(state.resultText || "");
+      if (resultScroll.dataset.renderMode !== "text" || resultScroll.textContent !== nextMainText) {
+        resultScroll.textContent = nextMainText;
+        resultScroll.dataset.renderMode = "text";
+        mainContentChanged = true;
+      }
+    }
     resultPane.classList.toggle("pending-streaming", Boolean(state.pending && state.resultText));
     resultPane.classList.toggle("pending-waiting", Boolean(state.pending && !state.resultText));
     if (statusText) {
       statusText.textContent = localizeBackendText(state.ui.status || t("就绪", "Ready"));
     }
-    applyAutoScroll("main-result");
+    if (mainContentChanged) {
+      applyAutoScroll("main-result");
+    } else if (resultScroll.scrollTop !== mainScrollTopBefore) {
+      resultScroll.scrollTop = mainScrollTopBefore;
+    }
 
     const mode = state.config?.translation_mode || "dictionary";
     const candidateState = candidateAvailability({
@@ -2177,11 +2314,35 @@
         delete footerCopy.dataset.tooltip;
       }
     }
+    const ttsMainActive = isTtsActiveSource(mainTtsSourceKey());
+    const ttsMainText = String(state.resultText || getMainResultTextFromDom() || "").trim();
+    const existingMainTtsBtn = resultPane.querySelector(".result-tts-btn");
+    let mainTtsBtn = existingMainTtsBtn;
+    if (ttsMainText && !(existingMainTtsBtn instanceof HTMLButtonElement)) {
+      const created = document.createElement("button");
+      created.className = "result-tts-btn";
+      created.dataset.action = "tts-main-toggle";
+      resultPane.appendChild(created);
+      mainTtsBtn = created;
+    } else if (!ttsMainText && existingMainTtsBtn instanceof HTMLButtonElement) {
+      existingMainTtsBtn.remove();
+      mainTtsBtn = null;
+    }
+    if (mainTtsBtn instanceof HTMLButtonElement) {
+      const canToggle = Boolean(ttsMainText);
+      mainTtsBtn.disabled = !canToggle;
+      mainTtsBtn.classList.toggle("disabled", !canToggle);
+      mainTtsBtn.setAttribute("aria-disabled", canToggle ? "false" : "true");
+      mainTtsBtn.classList.toggle("active", ttsMainActive);
+      mainTtsBtn.innerHTML = ttsMainActive ? icons.stop : icons.play;
+      mainTtsBtn.setAttribute("aria-label", ttsMainActive ? t("停止", "Stop") : t("播放", "Play"));
+    }
 
     const zoomSource = document.getElementById("zoomSource");
-    const zoomResult = document.getElementById("zoomResult");
+    const zoomResultTextNode = document.getElementById("zoomResultText");
     if (zoomSource) zoomSource.textContent = state.zoomPayload?.sourceText || state.sourceText;
-    if (zoomResult) zoomResult.textContent = state.zoomPayload?.resultText || state.resultText;
+    if (zoomResultTextNode) zoomResultTextNode.textContent = state.zoomPayload?.resultText || state.resultText;
+    patchZoomTtsButton();
     applyAutoScroll("zoom-shell");
     return true;
   }
@@ -2282,6 +2443,30 @@
           ? `<div class="bubble-candidate-placeholder">${escapeHtml(t("候选生成中...", "Generating candidates..."))}</div>`
           : `<div class="bubble-candidate-placeholder">${escapeHtml(t("点击顶部按钮生成候选", "Click top button to generate candidates"))}</div>`;
       }
+    }
+    const bubbleSource = bubbleTtsSourceKey();
+    const bubbleActive = isTtsActiveSource(bubbleSource);
+    const bubbleText = String(state.bubble?.result_text || "").trim();
+    const existingBubbleTtsBtn = result.querySelector(".bubble-result-tts-btn");
+    let ttsToggleBtn = existingBubbleTtsBtn;
+    if (bubbleText && !(existingBubbleTtsBtn instanceof HTMLButtonElement)) {
+      const created = document.createElement("button");
+      created.className = "bubble-result-tts-btn";
+      created.dataset.action = "tts-bubble-toggle";
+      result.appendChild(created);
+      ttsToggleBtn = created;
+    } else if (!bubbleText && existingBubbleTtsBtn instanceof HTMLButtonElement) {
+      existingBubbleTtsBtn.remove();
+      ttsToggleBtn = null;
+    }
+    const canToggle = Boolean(bubbleText);
+    if (ttsToggleBtn instanceof HTMLButtonElement) {
+      ttsToggleBtn.disabled = !canToggle;
+      ttsToggleBtn.classList.toggle("disabled", !canToggle);
+      ttsToggleBtn.setAttribute("aria-disabled", canToggle ? "false" : "true");
+      ttsToggleBtn.classList.toggle("active", bubbleActive);
+      ttsToggleBtn.innerHTML = bubbleActive ? icons.stop : icons.play;
+      ttsToggleBtn.setAttribute("aria-label", bubbleActive ? t("停止", "Stop") : t("播放", "Play"));
     }
     applyAutoScroll("bubble-result");
     return true;
@@ -2642,6 +2827,24 @@
           }
         }
         break;
+      case "tts-main-toggle": {
+        const text = String(state.resultText || getMainResultTextFromDom() || "").trim();
+        if (!text) break;
+        await toggleTts(text, mainTtsSourceKey());
+        break;
+      }
+      case "tts-bubble-toggle": {
+        const bubbleText = String(state.bubble?.result_text || getBubbleResultTextFromDom() || "").trim();
+        if (!bubbleText) break;
+        await toggleTts(bubbleText, bubbleTtsSourceKey());
+        break;
+      }
+      case "tts-zoom-toggle": {
+        const zoomText = String(state.zoomPayload?.resultText || state.resultText || "").trim();
+        if (!zoomText) break;
+        await toggleTts(zoomText, zoomTtsSourceKey());
+        break;
+      }
       case "clear-all":
         state.mainReqId = 0;
         state.sourceText = "";
@@ -2650,6 +2853,7 @@
         state.candidateItems = [];
         state.candidateReqId = 0;
         state.pending = false;
+        void apiCall("tts_stop");
         rerender();
         void apiCall("cancel_translation");
         break;
@@ -2786,6 +2990,15 @@
         }
         break;
       }
+      case "history-tts-result": {
+        const id = Number(actionTarget.dataset.historyId || "0");
+        const item = state.historyPanel.items.find((x) => Number(x.id) === id);
+        if (!item) break;
+        const text = String(item.result_text || "").trim();
+        if (!text) break;
+        await toggleTts(text, historyTtsSourceKey(id));
+        break;
+      }
       case "history-delete": {
         const id = Number(actionTarget.dataset.historyId || "0");
         if (id <= 0) break;
@@ -2877,6 +3090,9 @@
           state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
           state.aiAvailabilityMessage = String(payload.aiAvailability.message || "");
           state.aiAvailabilityCheckedAt = Number(payload.aiAvailability.checkedAt || 0);
+        }
+        if (payload.ttsState) {
+          syncTtsStateFromPayload(payload.ttsState);
         }
         if (state.config?.translation_mode !== "ai") {
           state.candidatePending = false;
@@ -3029,6 +3245,9 @@
           setTheme(payload.themeMode);
         }
         break;
+      case "tts-state":
+        syncTtsStateFromPayload(payload.ttsState || payload || {});
+        break;
       case "tray-opening":
         trayOpenedAtMs = Date.now();
         {
@@ -3082,7 +3301,7 @@
           state.zoomPayload.action = payload.bubble.action || state.zoomPayload.action;
           state.zoomPayload.mode = payload.bubble.mode || state.zoomPayload.mode;
           const zoomSource = document.getElementById("zoomSource");
-          const zoomResult = document.getElementById("zoomResult");
+          const zoomResult = document.getElementById("zoomResultText");
           if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
           if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
           applyAutoScroll("zoom-shell");
@@ -3101,7 +3320,7 @@
           state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
           state.zoomPayload.resultText = payload.resultText || state.zoomPayload.resultText || "";
           const zoomSource = document.getElementById("zoomSource");
-          const zoomResult = document.getElementById("zoomResult");
+          const zoomResult = document.getElementById("zoomResultText");
           if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
           if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
           applyAutoScroll("zoom-shell");
@@ -3113,7 +3332,7 @@
           state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
           state.zoomPayload.resultText = payload.resultText || state.zoomPayload.resultText || "";
           const zoomSource = document.getElementById("zoomSource");
-          const zoomResult = document.getElementById("zoomResult");
+          const zoomResult = document.getElementById("zoomResultText");
           if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
           if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
           applyAutoScroll("zoom-shell");
@@ -3126,7 +3345,7 @@
           state.zoomPayload.sourceText = payload.sourceText || state.zoomPayload.sourceText || "";
           state.zoomPayload.resultText = resultText;
           const zoomSource = document.getElementById("zoomSource");
-          const zoomResult = document.getElementById("zoomResult");
+          const zoomResult = document.getElementById("zoomResultText");
           if (zoomSource) zoomSource.textContent = state.zoomPayload.sourceText || "";
           if (zoomResult) zoomResult.textContent = state.zoomPayload.resultText || "";
           applyAutoScroll("zoom-shell");
