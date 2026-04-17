@@ -1955,6 +1955,20 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to show main window from tray")
 
+    def _show_main_window_from_external(self) -> None:
+        if self.main_window is None:
+            return
+        try:
+            self._set_main_window_taskbar_visibility(True, wait=True)
+            self._show_main_window_after_prepare()
+            self.hidden = False
+            try:
+                self.close_window("tray")
+            except Exception:
+                pass
+        except Exception:
+            self.logger.exception("Failed to show main window from external command")
+
     def _show_main_window_after_prepare(self) -> None:
         if self.main_window is None:
             return
@@ -4390,6 +4404,26 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to show main window via hotkey")
             return {"ok": False, "message": "主窗口显示失败"}
+
+    def handle_external_command(self, command: str) -> None:
+        text = str(command or "").strip().upper()
+        if not text:
+            return
+        if text != "SHOW_MAIN":
+            self.logger.info("Ignore unknown external command: %s", text)
+            return
+        if not self._webview_started:
+            self.logger.info("Ignore SHOW_MAIN command because webview is not ready yet")
+            return
+        try:
+            self._run_on_window_ui(
+                self.main_window,
+                self._show_main_window_from_external,
+                wait=False,
+                log_prefix="external.show_main",
+            )
+        except Exception:
+            self.logger.exception("Failed to handle external SHOW_MAIN command")
 
     def _system_double_click_window_sec(self) -> float:
         now = time.time()
