@@ -238,6 +238,7 @@ body.view-main .window-shell {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -272,11 +273,21 @@ body.view-main .window-card {
 }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   cursor: default;
+}
+
+body.view-main .topbar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  height: 10px;
 }
 
 .drag-row {
