@@ -9,7 +9,7 @@ English | [中文文档](./README.zh-CN.md)
 | Selection Translation | Input Translation | Screenshot Translation |
 | --- | --- | --- |
 | Select text in any app, then trigger selection translation by your configured mode | Open main window, type/paste text, then translate | Press `Ctrl+Alt+S` (default), drag-select region, get translated output |
-| ![Selection Translation](docs/images/demo-selection-en.gif) | ![Input Translation](docs/images/demo-main-translate-en.gif) | ![Screenshot Translation](docs/images/demo-main-translate-en.gif) |
+| ![Selection Translation](docs/images/demo-selection-en.gif) | ![Input Translation](docs/images/demo-main-translate-en.gif) | ![Screenshot Translation](docs/images/demo-screenshot-translate-en.gif) |
 
 ## Product Demo
 
