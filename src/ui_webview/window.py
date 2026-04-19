@@ -243,6 +243,8 @@ class WordPackWebviewApp:
         self._tray_window_ready = False
         self._tray_window_shape_applied = False
         self._tray_window_popup_flags_applied = False
+        self._bubble_window_ready = False
+        self._bubble_window_popup_flags_applied = False
         self._tray_window_created_at = 0.0
         self._pending_tray_anchor: dict[str, int] | None = None
         self._tray_show_timer: threading.Timer | None = None
@@ -986,8 +988,43 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to schedule tray window shape fix")
 
-    def _apply_tray_window_popup_flags(self, window, *, wait: bool = False) -> None:
-        # Keep custom tray window out of taskbar/Alt-Tab while preserving webview rendering.
+    def _apply_window_rounded_corners(self, window, *, wait: bool = False, log_prefix: str = "window") -> None:
+        if not self._is_windows_11_or_newer():
+            return
+
+        def apply() -> None:
+            native = getattr(window, "native", None)
+            if native is None:
+                return
+            handle = getattr(native, "Handle", None)
+            hwnd = self._native_handle_to_int(handle)
+            if not hwnd:
+                return
+            try:
+                DWMWA_WINDOW_CORNER_PREFERENCE = 33
+                DWMWCP_ROUND = 2
+                preference = ctypes.c_int(DWMWCP_ROUND)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    ctypes.c_void_p(hwnd),
+                    ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
+                    ctypes.byref(preference),
+                    ctypes.sizeof(preference),
+                )
+            except Exception:
+                self.logger.exception("Failed to apply rounded corners log_prefix=%s", log_prefix)
+
+        try:
+            self._run_on_window_ui(
+                window,
+                apply,
+                wait=wait,
+                log_prefix=f"apply_window_rounded_corners.{log_prefix}",
+            )
+        except Exception:
+            self.logger.exception("Failed to schedule rounded corners log_prefix=%s", log_prefix)
+
+    def _apply_popup_window_flags(self, window, *, wait: bool = False, log_prefix: str = "popup") -> None:
+        # Keep non-main webview windows out of taskbar/Alt-Tab while preserving rendering.
         def apply() -> None:
             native = getattr(window, "native", None)
             if native is None:
@@ -1032,17 +1069,17 @@ class WordPackWebviewApp:
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                     )
             except Exception:
-                self.logger.exception("Failed to apply tray window popup style flags")
+                self.logger.exception("Failed to apply popup style flags log_prefix=%s", log_prefix)
 
         try:
             self._run_on_window_ui(
                 window,
                 apply,
                 wait=wait,
-                log_prefix="apply_tray_window_popup_flags",
+                log_prefix=f"apply_popup_window_flags.{log_prefix}",
             )
         except Exception:
-            self.logger.exception("Failed to schedule tray window popup flags")
+            self.logger.exception("Failed to schedule popup window flags log_prefix=%s", log_prefix)
 
     def _on_webview_started(self) -> None:
         self._webview_started = True
@@ -1427,7 +1464,7 @@ class WordPackWebviewApp:
             self._tray_window_ready = True
             if self.tray_window is not None:
                 if not self._tray_window_popup_flags_applied:
-                    self._apply_tray_window_popup_flags(self.tray_window, wait=True)
+                    self._apply_popup_window_flags(self.tray_window, wait=True, log_prefix="tray")
                     self._tray_window_popup_flags_applied = True
                 if not self._tray_window_shape_applied:
                     self._apply_tray_window_shape_fix(self.tray_window, wait=True)
@@ -1436,6 +1473,20 @@ class WordPackWebviewApp:
             self._pending_tray_anchor = None
             if pending:
                 self._show_tray_menu(pending)
+            return
+        if kind == "bubble":
+            self._bubble_window_ready = True
+            if self.bubble_window is not None and not self._bubble_window_popup_flags_applied:
+                self._apply_popup_window_flags(self.bubble_window, wait=True, log_prefix="bubble")
+                self._apply_window_rounded_corners(self.bubble_window, wait=True, log_prefix="bubble")
+                self._bubble_window_popup_flags_applied = True
+            if self.bubble_window is not None:
+                try:
+                    self.bubble_window.resize(int(self._bubble_state.width or self.BUBBLE_WIDTH), int(self._bubble_state.height or self.BUBBLE_HEIGHT))
+                    self.bubble_window.move(int(self._bubble_state.x or 0), int(self._bubble_state.y or 0))
+                    self.bubble_window.show()
+                except Exception:
+                    self.logger.exception("Failed to reveal bubble window after ready")
             return
         if kind != "main" or self.main_window is None:
             return
@@ -3348,6 +3399,7 @@ class WordPackWebviewApp:
                 on_top=True,
                 focus=True,
                 transparent=False,
+                hidden=True,
             )
         else:
             try:
@@ -3359,7 +3411,8 @@ class WordPackWebviewApp:
                 else:
                     self.bubble_window.resize(width, height)
                     self.bubble_window.move(x, y)
-                self.bubble_window.show()
+                if self._bubble_window_ready:
+                    self.bubble_window.show()
             except Exception:
                 self.logger.exception("Failed to update bubble window geometry")
 
@@ -4266,6 +4319,8 @@ class WordPackWebviewApp:
                 )
                 window = self.bubble_window
                 self.bubble_window = None
+                self._bubble_window_ready = False
+                self._bubble_window_popup_flags_applied = False
         elif kind == "tray":
             self._cancel_tray_show_timer()
             if self.tray_window is not None:
