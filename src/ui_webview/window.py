@@ -1044,102 +1044,9 @@ class WordPackWebviewApp:
         except Exception:
             self.logger.exception("Failed to schedule tray window popup flags")
 
-    def _set_main_window_taskbar_visibility(self, visible_on_taskbar: bool, *, wait: bool = False) -> None:
-        window = self.main_window
-        if window is None:
-            return
-
-        def apply() -> None:
-            native = getattr(window, "native", None)
-            if native is None:
-                return
-
-            try:
-                native.ShowInTaskbar = bool(visible_on_taskbar)
-            except Exception:
-                pass
-            try:
-                native.ShowIcon = True
-            except Exception:
-                pass
-
-            handle = getattr(native, "Handle", None)
-            hwnd = self._native_handle_to_int(handle)
-            if not hwnd:
-                return
-
-            user32 = ctypes.windll.user32
-            GWL_EXSTYLE = -20
-            WS_EX_TOOLWINDOW = 0x00000080
-            WS_EX_APPWINDOW = 0x00040000
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-
-            try:
-                current = int(user32.GetWindowLongW(int(hwnd), GWL_EXSTYLE))
-                if bool(visible_on_taskbar):
-                    desired = (current | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
-                else:
-                    desired = (current | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
-                if desired != current:
-                    user32.SetWindowLongW(int(hwnd), GWL_EXSTYLE, int(desired))
-                    user32.SetWindowPos(
-                        int(hwnd),
-                        None,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-                    )
-            except Exception:
-                self.logger.exception(
-                    "Failed to switch main window taskbar visibility visible_on_taskbar=%s",
-                    bool(visible_on_taskbar),
-                )
-
-            # Win11 may drop rounded-corner compositor preference after EXSTYLE
-            # flips between TOOLWINDOW/APPWINDOW; restore it when main window
-            # returns to taskbar-visible mode.
-            if bool(visible_on_taskbar) and self._is_windows_11_or_newer():
-                try:
-                    DWMWA_WINDOW_CORNER_PREFERENCE = 33
-                    DWMWCP_ROUND = 2
-                    preference = ctypes.c_int(DWMWCP_ROUND)
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.c_void_p(hwnd),
-                        ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
-                        ctypes.byref(preference),
-                        ctypes.sizeof(preference),
-                    )
-                except Exception:
-                    pass
-
-        try:
-            self._run_on_window_ui(
-                window,
-                apply,
-                wait=wait,
-                log_prefix="set_main_window_taskbar_visibility",
-            )
-        except Exception:
-            self.logger.exception(
-                "Failed to schedule main window taskbar visibility switch visible_on_taskbar=%s",
-                bool(visible_on_taskbar),
-            )
-
     def _on_webview_started(self) -> None:
         self._webview_started = True
         self.logger.info("Starting background input services")
-        if self._startup_background_launch:
-            try:
-                # Startup-background mode should keep only tray presence, no taskbar entry.
-                self._set_main_window_taskbar_visibility(False, wait=True)
-            except Exception:
-                self.logger.exception("Failed to hide taskbar entry for startup-background launch")
         try:
             if self.main_window is not None:
                 current = self._current_main_geometry()
@@ -1539,11 +1446,6 @@ class WordPackWebviewApp:
             startup_background = bool(self._startup_background_launch)
 
         if startup_background:
-            try:
-                # Enforce taskbar-hidden mode again after main webview reports ready.
-                self._set_main_window_taskbar_visibility(False, wait=True)
-            except Exception:
-                self.logger.exception("Failed to enforce taskbar-hidden mode on main ready")
             self.logger.info("Startup background launch detected; keep main window hidden to tray")
             return
 
@@ -1956,7 +1858,6 @@ class WordPackWebviewApp:
         if self.main_window is None:
             return
         try:
-            self._set_main_window_taskbar_visibility(True, wait=True)
             self._show_main_window_after_prepare()
             self.hidden = False
             self.bridge.send("main", "tray-show-main", {})
@@ -1967,7 +1868,6 @@ class WordPackWebviewApp:
         if self.main_window is None:
             return
         try:
-            self._set_main_window_taskbar_visibility(True, wait=True)
             self._show_main_window_after_prepare()
             self.hidden = False
             try:
@@ -4346,10 +4246,6 @@ class WordPackWebviewApp:
                         log_prefix="close_window.main.hide",
                     )
                     self.hidden = True
-                    # On Windows 11, switching extended styles while the window is
-                    # still visible can cause a one-frame flash. Hide first, then
-                    # update taskbar visibility.
-                    self._set_main_window_taskbar_visibility(False, wait=True)
                     return {"ok": True, "hidden": True}
                 except Exception:
                     self.logger.exception("Failed to hide main window")
@@ -4419,7 +4315,6 @@ class WordPackWebviewApp:
             self.set_status("主窗口已隐藏到托盘")
             return result
         try:
-            self._set_main_window_taskbar_visibility(True, wait=True)
             self._run_on_window_ui(
                 self.main_window,
                 self._show_main_window_after_prepare,
