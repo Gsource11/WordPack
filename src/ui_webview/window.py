@@ -481,34 +481,15 @@ class WordPackWebviewApp:
     def run(self) -> None:
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = False
-        initial_main_height = self.MAIN_COMPACT_HEIGHT
-        main_x, main_y = self._centered_position(self.MAIN_WIDTH, initial_main_height)
-        bounds = get_virtual_screen_bounds()
-        main_y = max(bounds.top + 8, int(main_y) - self.MAIN_STARTUP_Y_SHIFT)
         startup_background = bool(self._startup_background_launch)
         if startup_background:
-            main_x = int(bounds.left) - int(self.MAIN_WIDTH) - 240
-            main_y = int(bounds.top) - int(initial_main_height) - 240
-            self._main_window_seeded_offscreen = True
-
-        app_title = self._app_title()
-        self.main_window = self._create_window(
-            kind="main",
-            title=app_title,
-            width=self.MAIN_WIDTH,
-            height=initial_main_height,
-            min_size=(420, self.MAIN_MIN_HEIGHT),
-            x=main_x,
-            y=main_y,
-            frameless=True,
-            shadow=True,
-            resizable=True,
-            on_top=False,
-            focus=not startup_background,
-            transparent=False,
-            hidden=True,
-        )
-        self.logger.info("Main webview window created")
+            if not self._ensure_tray_window():
+                self.logger.warning("Failed to create startup tray window; fallback to hidden main window")
+                self._create_main_window(focus=False, offscreen=True)
+            else:
+                self.logger.info("Startup background launch detected; defer main window creation")
+        else:
+            self._create_main_window(focus=True, offscreen=False)
         try:
             self.tray_icon.start()
         except Exception:
@@ -671,6 +652,41 @@ class WordPackWebviewApp:
         y_bias = min(120, max(56, height // 5))
         y = max(bounds.top + 8, center_y - y_bias)
         return x, y
+
+    def _create_main_window(self, *, focus: bool, offscreen: bool = False) -> bool:
+        if self.main_window is not None:
+            return True
+        initial_main_height = self.MAIN_COMPACT_HEIGHT
+        main_x, main_y = self._centered_position(self.MAIN_WIDTH, initial_main_height)
+        bounds = get_virtual_screen_bounds()
+        main_y = max(bounds.top + 8, int(main_y) - self.MAIN_STARTUP_Y_SHIFT)
+        if offscreen:
+            main_x = int(bounds.left) - int(self.MAIN_WIDTH) - 240
+            main_y = int(bounds.top) - int(initial_main_height) - 240
+            self._main_window_seeded_offscreen = True
+        else:
+            self._main_window_seeded_offscreen = False
+
+        self.main_window = self._create_window(
+            kind="main",
+            title=self._app_title(),
+            width=self.MAIN_WIDTH,
+            height=initial_main_height,
+            min_size=(420, self.MAIN_MIN_HEIGHT),
+            x=main_x,
+            y=main_y,
+            frameless=True,
+            shadow=True,
+            resizable=True,
+            on_top=False,
+            focus=focus,
+            transparent=False,
+            hidden=True,
+        )
+        self._main_startup_revealed = False
+        self.hidden = True
+        self.logger.info("Main webview window created")
+        return True
 
     def _hotkey_map(self) -> dict[str, str]:
         screenshot_hotkey = ""
@@ -1494,11 +1510,6 @@ class WordPackWebviewApp:
             if self._main_startup_revealed:
                 return
             self._main_startup_revealed = True
-            startup_background = bool(self._startup_background_launch)
-
-        if startup_background:
-            self.logger.info("Startup background launch detected; keep main window hidden to tray")
-            return
 
         def reveal_main() -> None:
             if self.main_window is None:
@@ -1906,21 +1917,19 @@ class WordPackWebviewApp:
             reveal()
 
     def _show_main_window(self) -> None:
-        if self.main_window is None:
-            return
         try:
             self._show_main_window_after_prepare()
-            self.hidden = False
+            if self._main_startup_revealed:
+                self.hidden = False
             self.bridge.send("main", "tray-show-main", {})
         except Exception:
             self.logger.exception("Failed to show main window from tray")
 
     def _show_main_window_from_external(self) -> None:
-        if self.main_window is None:
-            return
         try:
             self._show_main_window_after_prepare()
-            self.hidden = False
+            if self._main_startup_revealed:
+                self.hidden = False
             try:
                 self.close_window("tray")
             except Exception:
@@ -1930,8 +1939,12 @@ class WordPackWebviewApp:
 
     def _show_main_window_after_prepare(self) -> None:
         if self.main_window is None:
+            self._create_main_window(focus=True, offscreen=False)
+            return
+        if not self._main_startup_revealed:
             return
         self._prepare_main_window_first_show_position()
+        self._apply_window_rounded_corners(self.main_window, wait=False, log_prefix="main")
         self.main_window.show()
         self._raise_window_topmost_once(self.main_window)
 
@@ -4363,26 +4376,28 @@ class WordPackWebviewApp:
         return {"ok": True}
 
     def toggle_main_window_visibility(self) -> dict[str, Any]:
-        if self.main_window is None:
-            return {"ok": False, "message": "主窗口不可用"}
         if self._is_main_window_visible():
             result = self.close_window("main")
             self.set_status("主窗口已隐藏到托盘")
             return result
         try:
-            self._run_on_window_ui(
-                self.main_window,
-                self._show_main_window_after_prepare,
-                wait=True,
-                timeout_sec=1.2,
-                log_prefix="toggle_main_window_visibility.show",
-            )
-            self.hidden = False
+            if self.main_window is None:
+                self._show_main_window_after_prepare()
+            else:
+                self._run_on_window_ui(
+                    self.main_window,
+                    self._show_main_window_after_prepare,
+                    wait=True,
+                    timeout_sec=1.2,
+                    log_prefix="toggle_main_window_visibility.show",
+                )
+            if self._main_startup_revealed:
+                self.hidden = False
             try:
                 self.close_window("tray")
             except Exception:
                 pass
-            self.set_status("主窗口已显示")
+            self.set_status("主窗口已显示" if self._main_startup_revealed else "正在打开主窗口")
             return {"ok": True, "hidden": False}
         except Exception:
             self.logger.exception("Failed to show main window via hotkey")
@@ -4399,12 +4414,15 @@ class WordPackWebviewApp:
             self.logger.info("Ignore SHOW_MAIN command because webview is not ready yet")
             return
         try:
-            self._run_on_window_ui(
-                self.main_window,
-                self._show_main_window_from_external,
-                wait=False,
-                log_prefix="external.show_main",
-            )
+            if self.main_window is None:
+                self._show_main_window_from_external()
+            else:
+                self._run_on_window_ui(
+                    self.main_window,
+                    self._show_main_window_from_external,
+                    wait=False,
+                    log_prefix="external.show_main",
+                )
         except Exception:
             self.logger.exception("Failed to handle external SHOW_MAIN command")
 
