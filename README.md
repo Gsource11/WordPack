@@ -4,6 +4,10 @@
 
 English | [中文文档](./README.zh-CN.md)
 
+## Product Website
+
+An independent product introduction website is available in [`site/`](./site/). Open [`site/index.html`](./site/index.html) directly in a browser, or deploy the folder as a static site.
+
 ## Usage at a Glance
 
 | Selection Translation | Input Translation | Screenshot Translation |
