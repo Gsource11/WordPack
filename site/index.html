@@ -6,21 +6,27 @@
     <meta name="description" content="WordPack 是一款为 Windows 高频使用场景打造的桌面翻译工具，支持划词、截图、AI、离线词典与语音播放。" />
     <title>WordPack 词小包｜Windows 高频翻译助手</title>
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cabin:wght@500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="scroll-progress" aria-hidden="true"><span></span></div>
+    <video class="site-video-bg" autoplay muted loop playsinline preload="metadata" aria-hidden="true">
+      <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260210_031346_d87182fb-b0af-4273-84d1-c6fd17d6bf0f.mp4" type="video/mp4" />
+    </video>
     <div class="ambient ambient-a" aria-hidden="true"></div>
     <div class="ambient ambient-b" aria-hidden="true"></div>
-    <div class="cursor-glow" aria-hidden="true"></div>
 
     <header class="site-header" data-reveal>
       <a class="brand" href="#top" aria-label="WordPack home">
-        <span class="brand-mark"><img src="./assets/app-icon.svg" alt="" /></span>
-        <span class="brand-copy"><strong>WordPack</strong><small data-i18n="brand.subtitle">词小包</small></span>
+        <span class="brand-mark" aria-hidden="true">
+          <img src="./assets/app-icon.svg" alt="" />
+        </span>
+        <span class="brand-copy"><strong data-i18n="brand.name">词小包</strong></span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="#title-demo" data-i18n="nav.demo">演示</a>
+        <a href="#title-demo" data-i18n="nav.demo">界面</a>
         <a href="#title-workflow" data-i18n="nav.workflow">流程</a>
         <a href="#title-features" data-i18n="nav.features">功能</a>
         <a href="#title-download" data-i18n="nav.download">开始使用</a>
@@ -30,16 +36,22 @@
           <button class="lang-button active" type="button" data-lang="zh">中文</button>
           <button class="lang-button" type="button" data-lang="en">EN</button>
         </div>
-        <button class="theme-toggle" type="button" aria-label="切换亮暗主题" aria-pressed="false"><span></span></button>
-        <a class="button button-ghost" href="https://github.com/Gsource11/WordPack" target="_blank" rel="noreferrer">GitHub</a>
       </div>
+      <button class="mobile-menu-toggle" type="button" aria-label="Open menu" aria-controls="mobile-menu" aria-expanded="false"><span></span><span></span><span></span></button>
     </header>
+
+    <div class="mobile-menu" id="mobile-menu" aria-hidden="true">
+      <nav aria-label="Mobile navigation">
+        <a href="#title-demo" data-i18n="nav.demo">界面</a>
+        <a href="#title-workflow" data-i18n="nav.workflow">流程</a>
+        <a href="#title-features" data-i18n="nav.features">功能</a>
+        <a href="#title-download" data-i18n="nav.download">开始使用</a>
+      </nav></div>
 
     <main id="top">
       <section class="hero section-shell">
         <div class="hero-copy" data-reveal>
-          <div class="eyebrow"><span class="pulse-dot"></span><span data-i18n="hero.eyebrow">Windows 高频翻译助手</span></div>
-          <h1 data-i18n="hero.title">把翻译变成系统级的肌肉记忆。</h1>
+          <h1 data-i18n="hero.title">把翻译变成系统级的肌肉记忆</h1>
           <p class="hero-lead" data-i18n="hero.lead">WordPack 连接划词、截图 OCR、AI 翻译、离线词典和语音播放。无需打断当前工作流，在任何窗口里快速读懂外文内容。</p>
           <div class="hero-actions">
             <a class="button button-primary magnetic" href="https://github.com/Gsource11/WordPack/releases" target="_blank" rel="noreferrer" data-i18n="cta.download">下载最新版</a>
@@ -207,6 +219,9 @@
     <script src="./script.js"></script>
   </body>
 </html>
+
+
+
 
 
 

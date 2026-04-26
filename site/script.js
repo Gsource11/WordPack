@@ -6,11 +6,14 @@ const copy = {
   zh: {
     metaTitle: "WordPack 词小包｜Windows 高频翻译助手",
     metaDescription: "WordPack 是一款为 Windows 高频使用场景打造的桌面翻译工具，支持划词、截图、AI、离线词典与语音播放。",
-    brand: { subtitle: "词小包" },
+    brand: { name: "词小包", subtitle: "词小包" },
     nav: { demo: "界面", workflow: "流程", features: "能力", download: "开始" },
     hero: {
       eyebrow: "Windows 高频翻译助手",
-      title: "把翻译变成系统级的肌肉记忆。",
+      title: "把翻译变成系统级的肌肉记忆",
+      titleA: "把翻译变成",
+      titleAnd: "系统级",
+      titleB: "肌肉记忆",
       lead: "WordPack 连接划词、截图 OCR、AI 翻译、离线词典和语音播放。无需打断当前工作流，在任何窗口里快速读懂外文内容。",
       fact1: { k: "触发", v: "划词 / 热键 / 托盘" },
       fact2: { k: "引擎", v: "AI + Argos 离线" },
@@ -66,11 +69,14 @@ const copy = {
   en: {
     metaTitle: "WordPack｜A Windows translator for high-frequency work",
     metaDescription: "WordPack is a Windows desktop translator for selection translation, screenshot OCR translation, AI translation, offline dictionary translation, and text-to-speech.",
-    brand: { subtitle: "Desktop translator" },
+    brand: { name: "WordPack", subtitle: "Desktop translator" },
     nav: { demo: "Interface", workflow: "Workflow", features: "Capabilities", download: "Get Started" },
     hero: {
       eyebrow: "Windows translator for high-frequency work",
-      title: "Make translation feel like system muscle memory.",
+      title: "Make translation feel like system muscle memory",
+      titleA: "Make translation",
+      titleAnd: "feel",
+      titleB: "like muscle memory",
       lead: "WordPack brings selection translation, screenshot OCR, AI translation, offline dictionaries, and text-to-speech into one fast desktop workflow.",
       fact1: { k: "Trigger", v: "Selection / Hotkey / Tray" },
       fact2: { k: "Engines", v: "AI + Argos offline" },
@@ -242,11 +248,6 @@ themeButton?.addEventListener("click", () => {
 });
 
 if (!prefersReduced) {
-  window.addEventListener("pointermove", (event) => {
-    root.style.setProperty("--x", `${event.clientX}px`);
-    root.style.setProperty("--y", `${event.clientY}px`);
-  });
-
   document.querySelectorAll(".tilt-card").forEach((card) => {
     card.addEventListener("pointermove", (event) => {
       const rect = card.getBoundingClientRect();
@@ -273,16 +274,6 @@ if (!prefersReduced) {
 }
 
 
-const progressBar = document.querySelector(".scroll-progress span");
-const updateScrollProgress = () => {
-  if (!progressBar) return;
-  const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-  const ratio = scrollable > 0 ? window.scrollY / scrollable : 0;
-  progressBar.style.transform = `scaleX(${Math.min(1, Math.max(0, ratio))})`;
-};
-window.addEventListener("scroll", updateScrollProgress, { passive: true });
-window.addEventListener("resize", updateScrollProgress);
-updateScrollProgress();
 
 document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
   anchor.addEventListener("click", (event) => {
@@ -371,12 +362,51 @@ const initInterfaceCarousel = () => {
 
 initInterfaceCarousel();
 applyLanguage(currentLang);
+const siteHeader = document.querySelector(".site-header");
 
+const mobileMenu = document.querySelector(".mobile-menu");
+const mobileMenuToggle = document.querySelector(".mobile-menu-toggle");
+const setMobileMenu = (open) => {
+  if (!mobileMenu || !mobileMenuToggle) return;
+  mobileMenu.classList.toggle("is-open", open);
+  mobileMenu.setAttribute("aria-hidden", String(!open));
+  mobileMenuToggle.setAttribute("aria-expanded", String(open));
+};
+mobileMenuToggle?.addEventListener("click", () => {
+  const shouldOpen = !mobileMenu?.classList.contains("is-open");
+  setMobileMenu(Boolean(shouldOpen));
+});
+mobileMenu?.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => setMobileMenu(false)));
+document.addEventListener("pointerdown", (event) => {
+  if (!mobileMenu?.classList.contains("is-open")) return;
+  if (mobileMenu.contains(event.target) || mobileMenuToggle?.contains(event.target)) return;
+  setMobileMenu(false);
+});
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 980) setMobileMenu(false);
+});
 
+let headerTicking = false;
+const updateHeaderVisibility = () => {
+  if (!siteHeader) return;
+  const currentScrollY = window.scrollY;
+  const heroThreshold = Math.max(120, window.innerHeight - 140);
+  const shouldShow = currentScrollY < heroThreshold;
+  siteHeader.classList.toggle("header-hidden", !shouldShow);
+  if (!shouldShow) setMobileMenu(false);
+  headerTicking = false;
+};
+window.addEventListener("scroll", () => {
+  if (headerTicking) return;
+  headerTicking = true;
+  window.requestAnimationFrame(updateHeaderVisibility);
+}, { passive: true });
+window.addEventListener("resize", updateHeaderVisibility);
+updateHeaderVisibility();
 
-
-
-
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setMobileMenu(false);
+});
 
 
 
