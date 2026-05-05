@@ -58,6 +58,7 @@ class InteractionConfig:
     selection_candidate_dedupe_window_ms: int = 320
     selection_candidate_max_age_sec: float = 12.0
     app_profiles: list[SelectionAppProfile] = field(default_factory=list)
+    selection_ignored_executables: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -131,6 +132,32 @@ class ConfigStore:
         if icon_trigger not in {"inherit", "click", "hover"}:
             icon_trigger = "inherit"
         return SelectionAppProfile(executable=executable, mode=mode, icon_trigger=icon_trigger)
+
+    @staticmethod
+    def _normalize_executable_name(value: object) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        try:
+            return Path(raw).name.lower()
+        except Exception:
+            return raw
+
+    @classmethod
+    def _normalize_ignored_executables(cls, values: object) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            exe = cls._normalize_executable_name(item)
+            if not exe or exe in seen:
+                continue
+            seen.add(exe)
+            unique.append(exe)
+            if len(unique) >= 200:
+                break
+        return unique
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
@@ -224,6 +251,9 @@ class ConfigStore:
                 selection_candidate_dedupe_window_ms=int(interaction_raw.get("selection_candidate_dedupe_window_ms", 320) or 320),
                 selection_candidate_max_age_sec=float(interaction_raw.get("selection_candidate_max_age_sec", 12.0) or 12.0),
                 app_profiles=profile_items,
+                selection_ignored_executables=self._normalize_ignored_executables(
+                    interaction_raw.get("selection_ignored_executables", [])
+                ),
             ),
             history=HistoryConfig(
                 retention_days=int(history_raw.get("retention_days", 30) or 30),
@@ -275,6 +305,9 @@ class ConfigStore:
             if normalized is not None:
                 normalized_profiles.append(normalized)
         cfg.interaction.app_profiles = normalized_profiles
+        cfg.interaction.selection_ignored_executables = self._normalize_ignored_executables(
+            getattr(cfg.interaction, "selection_ignored_executables", [])
+        )
         if cfg.history.retention_days not in {7, 30, 90}:
             cfg.history.retention_days = 30
         cfg.openai.multi_candidate_count = max(2, min(3, int(cfg.openai.multi_candidate_count or 3)))

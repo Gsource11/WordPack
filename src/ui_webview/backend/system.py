@@ -173,6 +173,51 @@ def get_foreground_process_name() -> str:
                 pass
 
 
+def _process_name_from_pid(pid_value: int) -> str:
+    if int(pid_value or 0) <= 0:
+        return ""
+    process_handle = 0
+    try:
+        process_handle = int(kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid_value)))
+        if process_handle <= 0:
+            return ""
+        size = wintypes.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(int(size.value))
+        query = getattr(kernel32, "QueryFullProcessImageNameW", None)
+        if query is None:
+            return ""
+        ok = bool(query(wintypes.HANDLE(process_handle), 0, buffer, byref(size)))
+        if not ok:
+            return ""
+        full_path = str(buffer.value or "").strip()
+        if not full_path:
+            return ""
+        return Path(full_path).name.lower()
+    except Exception:
+        return ""
+    finally:
+        if process_handle:
+            try:
+                kernel32.CloseHandle(wintypes.HANDLE(process_handle))
+            except Exception:
+                pass
+
+
+def get_process_name_from_point(x: int, y: int) -> str:
+    try:
+        hwnd = int(user32.WindowFromPoint(POINT(int(x), int(y))))
+    except Exception:
+        return ""
+    if hwnd <= 0:
+        return ""
+    pid = wintypes.DWORD(0)
+    try:
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), byref(pid))
+    except Exception:
+        return ""
+    return _process_name_from_pid(int(pid.value or 0))
+
+
 def get_system_dpi_scale() -> float:
     try:
         get_dpi_for_system = getattr(user32, "GetDpiForSystem", None)

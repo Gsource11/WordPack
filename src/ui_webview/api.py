@@ -102,6 +102,12 @@ class WindowApi:
     def trigger_selection_translate(self) -> dict[str, Any]:
         return self._controller.trigger_selection_translate()
 
+    def add_current_selection_ignored_app(self) -> dict[str, Any]:
+        return self._controller.add_current_selection_ignored_app()
+
+    def add_selection_ignored_app_from_point(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._controller.add_selection_ignored_app_from_point(payload or {})
+
     def cancel_screenshot_selection(self) -> dict[str, Any]:
         return self._controller.cancel_screenshot_capture()
 

@@ -36,6 +36,7 @@ from src.ui_webview.backend import (
     capture_virtual_screen,
     copy_selection_once,
     get_foreground_process_name,
+    get_process_name_from_point,
     get_clipboard_text,
     get_cursor_position,
     get_system_dpi_scale,
@@ -222,6 +223,9 @@ class WordPackWebviewApp:
         self._fb_last_alt_tap_at = 0.0
         self._fb_last_shift_tap_at = 0.0
         self._fb_last_combo_s = False
+        self._ignore_app_pick_active = False
+        self._ignore_app_pick_started_at = 0.0
+        self._ignore_app_pick_mouse_down = False
         self._last_selection_trigger_at = 0.0
         self._last_selection_translate_trigger_at = 0.0
         self._last_poll_input_error_log_at = 0.0
@@ -2076,6 +2080,7 @@ class WordPackWebviewApp:
             "themeMode": self._resolved_theme_mode(),
             "aiAvailability": self._ai_availability_payload(),
             "ttsState": self._tts_state_payload(),
+            "ignoreAppPickerActive": bool(getattr(self, "_ignore_app_pick_active", False)),
         }
 
     def _tts_state_payload(self) -> dict[str, Any]:
@@ -2842,6 +2847,12 @@ class WordPackWebviewApp:
                     normalized = ConfigStore._normalize_selection_profile_item(item)
                 if normalized is not None:
                     normalized_profiles.append(normalized)
+        ignored_executables = self._normalize_ignored_executables(
+            interaction.get(
+                "selection_ignored_executables",
+                getattr(self.config.interaction, "selection_ignored_executables", []),
+            )
+        )
 
         screenshot_enabled = bool(interaction.get("screenshot_enabled", self.config.interaction.screenshot_enabled))
         screenshot_hotkey = normalize_shortcut(str(interaction.get("screenshot_hotkey", self.config.interaction.screenshot_hotkey) or ""))
@@ -2893,6 +2904,7 @@ class WordPackWebviewApp:
         self.config.interaction.selection_candidate_dedupe_window_ms = max(60, min(1500, candidate_dedupe_window_ms))
         self.config.interaction.selection_candidate_max_age_sec = max(2.0, min(30.0, float(candidate_max_age_sec)))
         self.config.interaction.app_profiles = normalized_profiles
+        self.config.interaction.selection_ignored_executables = ignored_executables
         self.config.history.retention_days = retention_days if retention_days in {7, 30, 90} else 30
 
         startup_prev = bool(self.config.interaction.startup_launch_enabled)
@@ -3648,6 +3660,30 @@ class WordPackWebviewApp:
         except Exception:
             return raw
 
+    def _normalize_ignored_executables(self, values: object) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            exe = self._normalize_executable_name(str(item or ""))
+            if not exe or exe in seen:
+                continue
+            seen.add(exe)
+            unique.append(exe)
+            if len(unique) >= 200:
+                break
+        return unique
+
+    def _is_selection_ignored_app(self, executable: str | None = None) -> bool:
+        exe = self._normalize_executable_name(executable or get_foreground_process_name())
+        if not exe:
+            return False
+        ignored = self._normalize_ignored_executables(
+            getattr(self.config.interaction, "selection_ignored_executables", [])
+        )
+        return exe in set(ignored)
+
     def _resolve_selection_profile(self, executable: str | None = None) -> tuple[str, str, str]:
         global_mode = str(self.config.interaction.selection_trigger_mode or "double_ctrl").strip().lower()
         if global_mode not in {"icon", "double_ctrl", "double_alt", "double_shift"}:
@@ -3872,6 +3908,39 @@ class WordPackWebviewApp:
         self._selection_icon_hover_armed = False
         self.close_window("icon")
         return self._translate_pending_selection()
+
+    def add_current_selection_ignored_app(self) -> dict[str, Any]:
+        self._ignore_app_pick_active = not bool(self._ignore_app_pick_active)
+        self._ignore_app_pick_started_at = time.time() if self._ignore_app_pick_active else 0.0
+        self._ignore_app_pick_mouse_down = False
+        payload = self._config_event_payload()
+        self.bridge.send("main", "config-updated", payload)
+        if self._ignore_app_pick_active:
+            return {"ok": True, "picking": True}
+        return {"ok": True, "picking": False}
+
+    def add_selection_ignored_app_from_point(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = payload if isinstance(payload, dict) else {}
+        try:
+            x = int(data.get("x", 0))
+            y = int(data.get("y", 0))
+        except Exception:
+            return {"ok": False, "message": "坐标无效"}
+        exe = self._normalize_executable_name(get_process_name_from_point(x, y))
+        if not exe:
+            return {"ok": False, "message": "未识别到该位置的应用"}
+        ignored = self._normalize_ignored_executables(
+            getattr(self.config.interaction, "selection_ignored_executables", [])
+        )
+        if exe in ignored:
+            return {"ok": True, "executable": exe, "alreadyExists": True}
+        ignored.append(exe)
+        self.config.interaction.selection_ignored_executables = self._normalize_ignored_executables(ignored)
+        self.config_store.save(self.config)
+        payload_out = self._config_event_payload()
+        self.bridge.send("main", "config-updated", payload_out)
+        self._emit_tray_menu_updated()
+        return {"ok": True, "executable": exe, "alreadyExists": False}
 
     def _translate_pending_selection(self) -> dict[str, Any]:
         existing_candidate = self._selection_candidate
@@ -4099,6 +4168,9 @@ class WordPackWebviewApp:
         if event in {"double_ctrl_selection", "double_alt_selection", "double_shift_selection"}:
             if self._screenshot_session is not None or self._selection_events_suppressed():
                 return
+            if self._is_selection_ignored_app():
+                self.logger.debug("Selection hotkey ignored for foreground app event=%s", event)
+                return
             trigger_event_mode = {
                 "double_ctrl_selection": "double_ctrl",
                 "double_alt_selection": "double_alt",
@@ -4110,6 +4182,9 @@ class WordPackWebviewApp:
 
         if event == "selection_mouse_up":
             if self._screenshot_session is not None or self._selection_events_suppressed():
+                return
+            if self._is_selection_ignored_app():
+                self.logger.debug("Selection mouse-up ignored for foreground app")
                 return
             self._emit_selection_candidate(payload)
             return
@@ -4147,6 +4222,9 @@ class WordPackWebviewApp:
         return True
 
     def _trigger_selection_translate_debounced(self, *, source: str) -> None:
+        if self._is_selection_ignored_app():
+            self.logger.debug("Selection translate trigger ignored for foreground app source=%s", source)
+            return
         if not self._selection_translate_trigger_allowed():
             self.logger.info("Selection translate trigger suppressed by debounce source=%s", source)
             return
@@ -4181,6 +4259,8 @@ class WordPackWebviewApp:
             self.close_window("icon")
 
     def _emit_selection_candidate(self, payload) -> None:
+        if self._is_selection_ignored_app():
+            return
         now = time.time()
         if self._selection_events_suppressed(now):
             return
@@ -5073,6 +5153,47 @@ class WordPackWebviewApp:
                 escape_down = bool(windll.user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
                 alt_down = bool(windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000)
                 shift_down = bool(windll.user32.GetAsyncKeyState(VK_SHIFT) & 0x8000)
+                if bool(self._ignore_app_pick_active):
+                    if (now - float(self._ignore_app_pick_started_at or now)) > 20.0:
+                        self._ignore_app_pick_active = False
+                        self._ignore_app_pick_started_at = 0.0
+                        self._ignore_app_pick_mouse_down = False
+                        self.bridge.send("main", "ignore-app-pick-result", {"ok": False, "message": "应用拾取超时，请重试"})
+                        self.bridge.send("main", "config-updated", self._config_event_payload())
+                    else:
+                        if lbtn_down:
+                            self._ignore_app_pick_mouse_down = True
+                        elif self._ignore_app_pick_mouse_down:
+                            self._ignore_app_pick_mouse_down = False
+                            self._ignore_app_pick_active = False
+                            self._ignore_app_pick_started_at = 0.0
+                            exe = self._normalize_executable_name(get_process_name_from_point(cursor_x, cursor_y))
+                            if not exe:
+                                self.bridge.send("main", "ignore-app-pick-result", {"ok": False, "message": "未识别到目标应用，请点选目标窗口后重试"})
+                            else:
+                                ignored = self._normalize_ignored_executables(
+                                    getattr(self.config.interaction, "selection_ignored_executables", [])
+                                )
+                                already_exists = exe in ignored
+                                if not already_exists:
+                                    ignored.append(exe)
+                                    self.config.interaction.selection_ignored_executables = self._normalize_ignored_executables(ignored)
+                                    self.config_store.save(self.config)
+                                self.bridge.send(
+                                    "main",
+                                    "ignore-app-pick-result",
+                                    {"ok": True, "executable": exe, "alreadyExists": bool(already_exists)},
+                                )
+                            self.bridge.send("main", "config-updated", self._config_event_payload())
+                            self._emit_tray_menu_updated()
+                    self._fb_last_lbtn_down = lbtn_down
+                    self._fb_last_rbtn_down = rbtn_down
+                    self._fb_last_ctrl_down = ctrl_down
+                    self._fb_last_alt_down = alt_down
+                    self._fb_last_shift_down = shift_down
+                    self._fb_last_escape_down = escape_down
+                    self._input_poll_stop.wait(0.012)
+                    continue
                 screenshot_session = self._screenshot_session
                 screenshot_active = screenshot_session is not None
                 screenshot_guard = screenshot_active or self._screenshot_starting or self._selection_events_suppressed(now)

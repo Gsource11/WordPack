@@ -1056,6 +1056,8 @@ body.view-main .zoom-result-tts-btn.active,
   background: var(--panel-muted);
   color: var(--text-2);
   font-weight: 700;
+  white-space: nowrap;
+  flex-wrap: nowrap;
 }
 
 .ghost-button .icon {
@@ -1235,6 +1237,36 @@ body.view-main .modal-panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.small-modal .modal-panel {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  width: min(332px, calc(100vw - 38px));
+  height: auto;
+  max-height: min(236px, calc(100vh - 72px));
+  min-height: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 18px 52px rgba(16, 24, 38, 0.34);
+  border: 1px solid #8f9daf;
+  background: #e8edf4;
+}
+
+.small-modal .modal-header {
+  margin-bottom: 0;
+}
+
+.small-modal .field {
+  margin: 0;
+}
+
+body.view-main .small-modal .modal-backdrop {
+  background: rgba(35, 43, 56, 0.32);
 }
 
 .sheet-header,
@@ -1497,10 +1529,10 @@ body.view-main .history-card {
 }
 
 .history-actions .mini-button {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 36px;
   min-height: 30px;
-  padding: 5px 0;
+  padding: 5px 8px;
 }
 
 .history-actions .mini-button .icon {
@@ -1675,6 +1707,63 @@ body.view-main .choice-chip.active {
 .settings-actions {
   display: flex;
   gap: var(--space-2);
+  flex-wrap: nowrap;
+}
+
+.settings-actions .ghost-button {
+  white-space: nowrap;
+  flex-wrap: nowrap;
+}
+
+.operation-settings .history-list .history-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+  padding: 6px 8px;
+  min-height: 36px;
+}
+
+.operation-settings .history-list .history-source {
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.operation-settings .history-list .history-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+.operation-settings .history-list .history-actions .mini-button {
+  min-width: 30px;
+  min-height: 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.operation-settings .history-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.operation-settings .history-list::-webkit-scrollbar {
+  width: 9px;
+}
+
+.operation-settings .history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.operation-settings .history-list::-webkit-scrollbar-thumb {
+  background: rgba(86, 104, 128, 0.52);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .operation-settings {

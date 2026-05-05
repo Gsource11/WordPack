@@ -52,6 +52,10 @@
     screenshotCancelHandler: null,
     screenshotInteractionCleanup: null,
     screenshotRenderToken: 0,
+    pickingIgnoreApp: false,
+    manualIgnoreModalOpen: false,
+    manualIgnoreInput: "",
+    ignoreAppPickerActive: false,
     historyClearConfirm: false,
     historyPanel: {
       tab: "recent",
@@ -190,6 +194,7 @@
     check: icon("<path d='M20 6 9 17l-5-5'/>"),
     error: icon("<circle cx='12' cy='12' r='9'/><path d='M9 9l6 6M15 9l-6 6'/>"),
     speaker: icon("<path d='M11 6 7.7 8.7H5v6.6h2.7L11 18z'/><path d='M14.5 9.5a4 4 0 0 1 0 5'/><path d='M16.8 7.2a7 7 0 0 1 0 9.6'/>"),
+    plus: icon("<path d='M12 5v14M5 12h14'/>"),
     play: "<span class='icon'><svg viewBox='0 0 24 24' fill='none' stroke='none'><path d='M8 5.8c0-.95 1.04-1.53 1.84-1.03l9.05 5.87a1.2 1.2 0 0 1 0 2.02l-9.05 5.87A1.2 1.2 0 0 1 8 17.58z' fill='currentColor'/></svg></span>",
     stop: "<span class='icon'><svg viewBox='0 0 24 24' fill='none' stroke='none'><rect x='6.7' y='6.7' width='10.6' height='10.6' rx='2.1' fill='currentColor'/></svg></span>",
   };
@@ -1102,6 +1107,7 @@
       }
     }
     if (payload.settings) state.settings = payload.settings;
+    state.ignoreAppPickerActive = Boolean(payload.ignoreAppPickerActive);
     if (payload.aiAvailability) {
       state.aiAvailable = Boolean(payload.aiAvailability.available);
       state.aiAvailableChecked = Boolean(payload.aiAvailability.checked);
@@ -1649,6 +1655,9 @@
       || "off",
     ).toLowerCase();
     const bubbleCloseOnClickOutside = draft.interaction?.bubble_close_on_click_outside === true;
+    const selectionIgnoredExecutables = Array.isArray(draft.interaction?.selection_ignored_executables)
+      ? draft.interaction.selection_ignored_executables.filter((item) => String(item || "").trim())
+      : [];
     const directionOptions = Array.from(new Set([
       "auto",
       ...(settings.dictionaryModels || []).map((item) => item.direction).filter(Boolean),
@@ -2004,6 +2013,30 @@
                   <input class="shortcut-input" data-shortcut-field="interaction.bubble_restore_hotkey" value="${escapeHtml(bubbleRestoreHotkey)}" placeholder="${escapeHtml(t("按下新的快捷键组合", "Press a new shortcut"))}" readonly />
                 </div>
               </div>
+              <div class="field setting-toggle-item">
+                <div class="setting-toggle-meta">
+                  <label>${escapeHtml(t("忽略应用", "Ignored Apps"))}</label>
+                  <small>${escapeHtml(t("命中后不响应双击 Ctrl/Alt/Shift 与图标触发。", "When matched, double Ctrl/Alt/Shift and icon triggers are disabled."))}</small>
+                </div>
+                <div class="setting-toggle-extra">
+                  <div class="settings-actions">
+                    <button class="ghost-button" data-action="add-current-ignore-app">${icons.plus}<span>${escapeHtml(t("选定添加", "Pick to Add"))}</span></button>
+                    <button class="ghost-button" data-action="add-ignore-app-manual">${icons.plus}<span>${escapeHtml(t("手动添加", "Add Manually"))}</span></button>
+                  </div>
+                  ${state.ignoreAppPickerActive ? `<div class="notice warning">${escapeHtml(t("正在选择应用：请点击目标应用窗口任意位置，按 Esc 可取消。", "Picking app: click any point in target app window. Press Esc to cancel."))}</div>` : ""}
+                  <div class="history-list">
+                    ${selectionIgnoredExecutables.length ? selectionIgnoredExecutables.map((exe) => `
+                      <article class="history-card">
+                        <div class="history-text history-source">${escapeHtml(exe)}</div>
+                        <div class="history-actions">
+                          <button class="mini-button" data-action="remove-ignore-app" data-exe="${escapeHtml(exe)}" data-tooltip="${escapeHtml(t("删除", "Delete"))}">${icons.trash}</button>
+                        </div>
+                      </article>
+                    `).join("") : `<div class="notice">${escapeHtml(t("暂无忽略应用", "No ignored apps"))}</div>`}
+                  </div>
+                  <small>${escapeHtml(t("仅影响划词翻译，不影响截图翻译快捷键。", "Only affects selection translation, not screenshot shortcut."))}</small>
+                </div>
+              </div>
             </section>
           </div>
         </div>
@@ -2027,6 +2060,23 @@
                 ${zoomTtsReady ? `<button class="zoom-result-tts-btn ${zoomTtsActive ? "active" : ""}" data-action="tts-zoom-toggle" aria-label="${escapeHtml(zoomTtsLabel)}">${zoomTtsIcon}</button>` : ""}
               </section>
             </div>
+          </div>
+        </div>
+      </section>
+      <section class="zoom-modal small-modal ${state.manualIgnoreModalOpen ? "open" : ""}">
+        <div class="modal-backdrop" data-action="close-ignore-manual-modal"></div>
+        <div class="modal-panel">
+          <div class="modal-header">
+            <div class="modal-title">${escapeHtml(t("手动添加", "Add Manually"))}</div>
+            <button class="icon-button" data-action="close-ignore-manual-modal">${icons.close}</button>
+          </div>
+          <div class="field">
+            <label>${escapeHtml(t("可执行文件名", "Executable Name"))}</label>
+            <input id="manualIgnoreExeInput" data-field="manual.ignore.exe" placeholder="${escapeHtml(t("例如：game.exe", "e.g. game.exe"))}" value="${escapeHtml(state.manualIgnoreInput || "")}" />
+          </div>
+          <div class="settings-actions">
+            <button class="ghost-button" data-action="close-ignore-manual-modal">${escapeHtml(t("取消", "Cancel"))}</button>
+            <button class="ghost-button" data-action="confirm-ignore-app-manual">${escapeHtml(t("添加", "Add"))}</button>
           </div>
         </div>
       </section>
@@ -3021,6 +3071,74 @@
       case "trigger-selection":
         await apiCall("trigger_selection_translate");
         break;
+      case "add-current-ignore-app": {
+        const response = await apiCall("add_current_selection_ignored_app");
+        if (!response || response.ok === false) {
+          showToast("warning", response?.message || t("操作失败", "Operation failed"));
+          break;
+        }
+        state.ignoreAppPickerActive = Boolean(response.picking);
+        showToast(
+          "success",
+          state.ignoreAppPickerActive
+            ? t("请选择目标窗口（按 Esc 取消）", "Select target window (Esc to cancel)")
+            : t("已取消应用拾取", "App picking cancelled"),
+        );
+        rerender();
+        break;
+      }
+      case "add-ignore-app-manual": {
+        state.manualIgnoreInput = "";
+        state.manualIgnoreModalOpen = true;
+        rerender();
+        setTimeout(() => {
+          const input = document.getElementById("manualIgnoreExeInput");
+          if (input) input.focus();
+        }, 0);
+        break;
+      }
+      case "close-ignore-manual-modal":
+        state.manualIgnoreModalOpen = false;
+        rerender();
+        break;
+      case "confirm-ignore-app-manual": {
+        const value = String(state.manualIgnoreInput || "").trim().toLowerCase();
+        if (!value) {
+          showToast("warning", t("请输入 exe 名称", "Please enter an exe name"));
+          break;
+        }
+        if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
+        if (!state.settingsDraft.interaction) state.settingsDraft.interaction = {};
+        const list = Array.isArray(state.settingsDraft.interaction.selection_ignored_executables)
+          ? state.settingsDraft.interaction.selection_ignored_executables.slice()
+          : [];
+        const normalized = value.includes("\\") || value.includes("/")
+          ? (value.split(/[\\/]/).pop() || "")
+          : value;
+        if (!normalized) break;
+        if (!list.includes(normalized)) {
+          list.push(normalized);
+        }
+        state.settingsDraft.interaction.selection_ignored_executables = list.slice(0, 200);
+        state.manualIgnoreModalOpen = false;
+        scheduleSettingsSave(true);
+        rerender();
+        break;
+      }
+      case "remove-ignore-app": {
+        const exe = String(actionTarget.dataset.exe || "").trim().toLowerCase();
+        if (!exe) break;
+        if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
+        if (!state.settingsDraft.interaction) state.settingsDraft.interaction = {};
+        const list = Array.isArray(state.settingsDraft.interaction.selection_ignored_executables)
+          ? state.settingsDraft.interaction.selection_ignored_executables
+          : [];
+        state.settingsDraft.interaction.selection_ignored_executables = list.filter((item) => String(item || "").trim().toLowerCase() !== exe);
+        scheduleSettingsSave(true);
+        showToast("success", t("已删除忽略应用", "Ignored app removed"));
+        rerender();
+        break;
+      }
       default:
         break;
     }
@@ -3042,6 +3160,11 @@
     }
     const field = event.target.dataset.field;
     if (!field) return;
+
+    if (field === "manual.ignore.exe") {
+      state.manualIgnoreInput = String(event.target.value || "");
+      return;
+    }
 
     if (!state.settingsDraft) {
       state.settingsDraft = clone(state.config || {});
@@ -3094,6 +3217,7 @@
         if (payload.ttsState) {
           syncTtsStateFromPayload(payload.ttsState);
         }
+        state.ignoreAppPickerActive = Boolean(payload.ignoreAppPickerActive);
         if (state.config?.translation_mode !== "ai") {
           state.candidatePending = false;
           state.candidateItems = [];
@@ -3102,6 +3226,12 @@
         if (!state.settingsOpen) {
           state.settingsDraft = clone(state.config || {});
         } else {
+          const serverIgnored = Array.isArray(state.config?.interaction?.selection_ignored_executables)
+            ? state.config.interaction.selection_ignored_executables.map((x) => String(x || "").trim().toLowerCase()).filter(Boolean)
+            : [];
+          if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
+          if (!state.settingsDraft.interaction) state.settingsDraft.interaction = {};
+          state.settingsDraft.interaction.selection_ignored_executables = serverIgnored;
           shouldRerender = false;
         }
         setTheme(payload.themeMode || payload.settings?.effectiveTheme || "light");
@@ -3244,6 +3374,31 @@
         if (payload.themeMode) {
           setTheme(payload.themeMode);
         }
+        break;
+      case "ignore-app-pick-result":
+        state.ignoreAppPickerActive = false;
+        if (!payload || payload.ok === false) {
+          showToast("warning", payload?.message || t("应用拾取失败", "App picking failed"));
+          rerender();
+          break;
+        }
+        if (!state.settingsDraft) state.settingsDraft = clone(state.config || {});
+        if (!state.settingsDraft.interaction) state.settingsDraft.interaction = {};
+        const currentIgnored = Array.isArray(state.settingsDraft.interaction.selection_ignored_executables)
+          ? state.settingsDraft.interaction.selection_ignored_executables.slice()
+          : [];
+        const pickedExe = String(payload.executable || "").trim().toLowerCase();
+        if (pickedExe && !currentIgnored.includes(pickedExe)) {
+          currentIgnored.push(pickedExe);
+          state.settingsDraft.interaction.selection_ignored_executables = currentIgnored.slice(0, 200);
+        }
+        showToast(
+          "success",
+          payload.alreadyExists
+            ? t("该应用已在忽略列表中", "App already in ignore list")
+            : t("已添加到忽略列表", "Added to ignore list"),
+        );
+        rerender();
         break;
       case "tts-state":
         syncTtsStateFromPayload(payload.ttsState || payload || {});
@@ -3402,6 +3557,13 @@
   }
 
   function handleKeydown(event) {
+    if (state.ignoreAppPickerActive && event.key === "Escape") {
+      event.preventDefault();
+      void apiCall("add_current_selection_ignored_app");
+      state.ignoreAppPickerActive = false;
+      rerender();
+      return;
+    }
     if (state.view === "tray" && event.key === "Escape") {
       event.preventDefault();
       const active = document.activeElement;
